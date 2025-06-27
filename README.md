@@ -21,4 +21,5 @@
 ## 🚀 Usage
 
 ```bash
+Obtain xls from your bank, put it in dir next to the script. Let it rip. 
 python3 finance.py -f bank.xlsx --fx 117.5 --sqlite --debug
