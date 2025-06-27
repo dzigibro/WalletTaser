@@ -38,10 +38,10 @@ latest_xls = lambda: sorted(glob.glob('*.xls*'),
 
 # ─────────── vendor  patterns ──────────
 PATTERNS = {
-    'MAXI':['maxi'], 'TIDAL':['tidal'], 'TRYHACKME':['tryhackme'],
+    'MAXI':['maxi'], 'TIDAL':['tidal'],
     'CAR GO':['car go','cargo'], 'APOTEKA':['apoteka'], 'LIDL':['lidl'],
     'EBAY':['ebay'], 'ALIEXPRESS':['aliexpress','ali express','ali'],
-    'HARMONIJA':['harmonija'], 'GO TECH':['go technologies'],
+    'GO TECH':['go technologies'],
     'PAYPAL':['paypal'], 'WOLT':['wolt'], 'DEXPRESS':['dexpress'],
 }
 ADVANCED_PATTERNS = {
