@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # ─────────────────────────────────────────────────────────────
-#  Balkan Schizo Finance – WALLET TASER 2.1
-#  (full report  + 12-month savings projection)
+#  #  (full report  + 12-month savings projection)
 # ─────────────────────────────────────────────────────────────
 """
 $ python3 finance.py
