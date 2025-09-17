@@ -1,3 +1,9 @@
 pandas
 matplotlib
 xlrd
+fastapi
+uvicorn
+python-multipart
+sqlalchemy
+celery
+redis
