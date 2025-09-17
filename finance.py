@@ -5,21 +5,25 @@
 """
 $ python3 finance.py
 $ python3 finance.py -f bank.xlsx --fx 118 --sqlite --debug
-Creates ./finance_report_<timestamp>/  with:
-  totals.png, vendors_top.png, needs_wants.png,
-  weekday_spend.png, hourly_spend.png (if data present),
-  monthly_trends.png, rolling30_spend.png (or rolling7*),
-  monthly_net.png, projected_net.png,
-  projected_savings.png  ⟵ NEW
+Stores a manifest containing:
+  totals.png/json, vendors_top.png/json, needs_wants.png/json,
+  weekday_spend.png/json, hourly_spend.png/json (if data present),
+  monthly_trends.png/json, rolling30/7_spend.png/json,
+  monthly_net.png/json, projected_net.png/json,
+  projected_savings.png/json,
   full_enriched_dataset.csv  (+ transactions.db if --sqlite)
 """
 from __future__ import annotations
 import argparse, csv, glob, logging, os, re, sqlite3, sys, textwrap
 from datetime import datetime, timedelta
+from io import BytesIO
 from itertools import cycle
+from typing import Dict
 
 import matplotlib.pyplot as plt
 import pandas as pd
+
+from storage import Storage, get_storage
 
 TAG_FILE = 'vendor_tags.csv'           # persistent NEEDS/WANTS map
 DEF_FX   = 117.0                       # default RSD → EUR
@@ -146,109 +150,179 @@ def summary(df:pd.DataFrame):
 # ─── plotting ───
 def safe(fn):                # decorator
     def wrap(*a,**k):
-        try:fn(*a,**k)
-        except Exception as e: logging.warning('%s failed: %s',fn.__name__,e)
+        try:
+            return fn(*a,**k)
+        except Exception as e:
+            logging.warning('%s failed: %s',fn.__name__,e)
+            return None
     return wrap
 
+
+def _finalize_plot(fig) -> bytes:
+    buf = BytesIO()
+    fig.savefig(buf, format='png')
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 @safe
-def plot_totals(folder,m,ai,asp,asv,ast):
+def chart_totals(m,ai,asp,asv,ast):
     labels=['Spend','Save','Stocks','Income']
     vals=[abs(asp)*m,asv*m,ast*m,ai*m]
-    plt.figure(figsize=(8,4))
-    bars=plt.bar(labels,vals,color=['#e74c3c','#27ae60','#8e44ad','#3498db'])
-    for b,v in zip(bars,vals): plt.text(b.get_x()+b.get_width()/2,v,fmt(v),
-                                        ha='center',va='bottom',fontsize=9)
-    plt.title('Totals by Category'); plt.ylabel('RSD')
-    plt.tight_layout(); plt.savefig(f'{folder}/totals.png'); plt.close()
+    fig, ax = plt.subplots(figsize=(8,4))
+    bars=ax.bar(labels,vals,color=['#e74c3c','#27ae60','#8e44ad','#3498db'])
+    for b,v in zip(bars,vals):
+        ax.text(b.get_x()+b.get_width()/2,v,fmt(v),ha='center',va='bottom',fontsize=9)
+    ax.set_title('Totals by Category'); ax.set_ylabel('RSD')
+    fig.tight_layout()
+    return _finalize_plot(fig), {'labels':labels,'values':[float(v) for v in vals],'months':m}
 
-TOP_COLORS=cycle(['#e74c3c','#f1c40f','#27ae60'])
+
+TOP_COLORS=['#e74c3c','#f1c40f','#27ae60']
+
+
 @safe
-def plot_vendors(folder,df):
+def chart_vendors(df:pd.DataFrame):
     top=(df[df.Iznos<0].groupby('VENDOR')['Iznos']
          .sum().abs().sort_values(ascending=False).head(10))
-    colors=[next(TOP_COLORS) if i<3 else '#2980b9' for i in range(len(top))]
-    plt.figure(figsize=(10,6))
-    bars=plt.bar(top.index,top.values,color=colors)
+    if top.empty:
+        return None
+    palette=cycle(TOP_COLORS)
+    colors=[next(palette) if i<len(TOP_COLORS) else '#2980b9' for i in range(len(top))]
+    fig, ax = plt.subplots(figsize=(10,6))
+    bars=ax.bar(top.index,top.values,color=colors)
     for b,v in zip(bars,top.values):
-        plt.text(b.get_x()+b.get_width()/2,v,fmt(v),ha='center',va='bottom',fontsize=9)
-    plt.title('Top Vendor Spend'); plt.ylabel('RSD'); plt.xticks(rotation=45)
-    plt.tight_layout(); plt.savefig(f'{folder}/vendors_top.png'); plt.close()
+        ax.text(b.get_x()+b.get_width()/2,v,fmt(v),ha='center',va='bottom',fontsize=9)
+    ax.set_title('Top Vendor Spend'); ax.set_ylabel('RSD'); ax.set_xticklabels(top.index,rotation=45)
+    fig.tight_layout()
+    data={'vendors':list(top.index),'values':[float(v) for v in top.values]}
+    return _finalize_plot(fig), data
+
 
 @safe
-def plot_weekday(folder,df):
+def chart_weekday(df:pd.DataFrame):
     wk=df[df.Iznos<0].groupby('DAY')['Iznos'].sum()
-    plt.figure(figsize=(8,4)); wk.plot(kind='bar',color='#c0392b')
-    plt.title('Spending by Weekday'); plt.ylabel('RSD')
-    plt.xticks(range(7),['Mon','Tue','Wed','Thu','Fri','Sat','Sun'])
-    plt.tight_layout(); plt.savefig(f'{folder}/weekday_spend.png'); plt.close()
+    if wk.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(8,4))
+    wk.plot(kind='bar',color='#c0392b',ax=ax)
+    ax.set_title('Spending by Weekday'); ax.set_ylabel('RSD')
+    ax.set_xticks(range(7))
+    ax.set_xticklabels(['Mon','Tue','Wed','Thu','Fri','Sat','Sun'])
+    fig.tight_layout()
+    data={'days':['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+          'values':[float(wk.reindex(range(7),fill_value=0).iloc[i]) for i in range(7)]}
+    return _finalize_plot(fig), data
+
 
 @safe
-def plot_hourly(folder,df):
+def chart_hourly(df:pd.DataFrame):
     hr=df[df.Iznos<0].groupby('HOUR')['Iznos'].sum()
-    if hr.sum()==0 or hr.nunique()<=1: return
+    if hr.sum()==0 or hr.nunique()<=1:
+        return None
     hr=hr.reindex(range(24),fill_value=0)
-    plt.figure(figsize=(14,4)); hr.plot(kind='bar',color='#9b59b6')
-    plt.grid(axis='y',alpha=.3); plt.title('Spending by Hour (0-23)')
-    plt.xlabel('Hour'); plt.ylabel('RSD')
-    plt.tight_layout(); plt.savefig(f'{folder}/hourly_spend.png'); plt.close()
+    fig, ax = plt.subplots(figsize=(14,4))
+    hr.plot(kind='bar',color='#9b59b6',ax=ax)
+    ax.grid(axis='y',alpha=.3); ax.set_title('Spending by Hour (0-23)')
+    ax.set_xlabel('Hour'); ax.set_ylabel('RSD')
+    fig.tight_layout()
+    data={'hours':list(range(24)),'values':[float(v) for v in hr.values]}
+    return _finalize_plot(fig), data
+
 
 @safe
-def plot_monthly_trends(folder,df):
+def chart_monthly_trends(df:pd.DataFrame):
     m=(df.groupby(['YEAR_MONTH','ADV_CAT'])['Iznos']
          .sum().unstack().fillna(0))
-    m.plot(kind='bar',stacked=True,figsize=(12,6))
-    plt.title('Monthly Cash-flow by Advanced Category'); plt.ylabel('RSD')
-    plt.xticks(rotation=45)
-    plt.tight_layout(); plt.savefig(f'{folder}/monthly_trends.png'); plt.close()
+    if m.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(12,6))
+    m.plot(kind='bar',stacked=True,ax=ax)
+    ax.set_title('Monthly Cash-flow by Advanced Category'); ax.set_ylabel('RSD')
+    ax.set_xticklabels([str(i) for i in m.index],rotation=45)
+    fig.tight_layout()
+    data={'months':[str(i) for i in m.index],
+          'series':{col:[float(v) for v in m[col].tolist()] for col in m.columns}}
+    return _finalize_plot(fig), data
+
 
 @safe
-def plot_rolling(folder,df):
+def chart_rolling(df:pd.DataFrame):
     daily=(df[df.Iznos<0]
              .set_index('Datum').resample('D')['Iznos']
              .sum().abs())
+    if daily.empty:
+        return None
     win=30 if len(daily)>=30 else 7
-    daily.rolling(win).sum().plot(figsize=(12,5))
-    plt.title(f'{win}-Day Rolling Spend'); plt.ylabel('RSD')
-    plt.tight_layout(); plt.savefig(f'{folder}/rolling{win}_spend.png'); plt.close()
+    rolled=daily.rolling(win).sum()
+    fig, ax = plt.subplots(figsize=(12,5))
+    rolled.plot(ax=ax)
+    ax.set_title(f'{win}-Day Rolling Spend'); ax.set_ylabel('RSD')
+    fig.tight_layout()
+    data={'window':win,
+          'series':[{'date':d.strftime('%Y-%m-%d'),'value':float(v)} for d,v in rolled.dropna().items()]}
+    return _finalize_plot(fig), data
+
 
 @safe
-def plot_monthly_net(folder,df):
+def chart_monthly_net(df:pd.DataFrame):
     netm=df.groupby('YEAR_MONTH')['Iznos'].sum()
-    netm.plot(marker='o',figsize=(10,4))
-    plt.axhline(0,color='gray',ls='--')
-    plt.title('Monthly Net Δ'); plt.ylabel('RSD')
-    plt.tight_layout(); plt.savefig(f'{folder}/monthly_net.png'); plt.close()
+    if netm.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(10,4))
+    netm.plot(marker='o',ax=ax)
+    ax.axhline(0,color='gray',ls='--')
+    ax.set_title('Monthly Net Δ'); ax.set_ylabel('RSD')
+    fig.tight_layout()
+    data={'months':[str(i) for i in netm.index],'values':[float(v) for v in netm.values]}
+    return _finalize_plot(fig), data
+
 
 @safe
-def plot_needs_wants(folder,df):
+def chart_needs_wants(df:pd.DataFrame):
     s=(df[(df.Iznos<0)&(df.NEEDS_WANTS!='TRANSFER')]
          .groupby('NEEDS_WANTS')['Iznos'].sum().abs())
     s=s.reindex(['NEEDS','WANTS']).fillna(0)
-    plt.figure(figsize=(7,5))
-    bars=plt.bar(s.index,s.values,color=['#2ecc71','#e67e22'])
+    if s.sum()==0:
+        return None
+    fig, ax = plt.subplots(figsize=(7,5))
+    bars=ax.bar(s.index,s.values,color=['#2ecc71','#e67e22'])
     for b,v in zip(bars,s.values):
-        plt.text(b.get_x()+b.get_width()/2,v,fmt(v),ha='center',va='bottom',fontsize=10)
-    plt.title('NEEDS vs WANTS'); plt.ylabel('RSD')
-    plt.tight_layout(); plt.savefig(f'{folder}/needs_wants.png'); plt.close()
+        ax.text(b.get_x()+b.get_width()/2,v,fmt(v),ha='center',va='bottom',fontsize=10)
+    ax.set_title('NEEDS vs WANTS'); ax.set_ylabel('RSD')
+    fig.tight_layout()
+    data={'categories':list(s.index),'values':[float(v) for v in s.values]}
+    return _finalize_plot(fig), data
+
 
 @safe
-def plot_projected_net(folder,net):
+def chart_projected_net(net:list[float]):
+    if not net:
+        return None
     xs=list(range(len(net))); ys=net
-    plt.figure(figsize=(10,5))
-    plt.plot(xs,ys,marker='o',color='#1abc9c')
-    plt.title('Projected Net Worth'); plt.xlabel('Months'); plt.ylabel('RSD')
-    plt.grid(alpha=.3)
-    plt.tight_layout(); plt.savefig(f'{folder}/projected_net.png'); plt.close()
+    fig, ax = plt.subplots(figsize=(10,5))
+    ax.plot(xs,ys,marker='o',color='#1abc9c')
+    ax.set_title('Projected Net Worth'); ax.set_xlabel('Months'); ax.set_ylabel('RSD')
+    ax.grid(alpha=.3)
+    fig.tight_layout()
+    data={'months':xs,'values':[float(v) for v in ys]}
+    return _finalize_plot(fig), data
+
 
 @safe
-def plot_projected_savings(folder,save_proj):
+def chart_projected_savings(save_proj:list[float]):
+    if not save_proj:
+        return None
     xs=list(range(1,len(save_proj)+1))
-    plt.figure(figsize=(10,5))
-    plt.plot(xs,save_proj,marker='o',color='#e67e22')
-    plt.title('Projected Savings Only (12 mo)')
-    plt.xlabel('Months'); plt.ylabel('RSD')
-    plt.grid(alpha=.3)
-    plt.tight_layout(); plt.savefig(f'{folder}/projected_savings.png'); plt.close()
+    fig, ax = plt.subplots(figsize=(10,5))
+    ax.plot(xs,save_proj,marker='o',color='#e67e22')
+    ax.set_title('Projected Savings Only (12 mo)')
+    ax.set_xlabel('Months'); ax.set_ylabel('RSD')
+    ax.grid(alpha=.3)
+    fig.tight_layout()
+    data={'months':xs,'values':[float(v) for v in save_proj]}
+    return _finalize_plot(fig), data
 
 # ─── CLI ───
 P=argparse.ArgumentParser(
@@ -261,6 +335,10 @@ P=argparse.ArgumentParser(
 P.add_argument('-f','--file',help='bank statement (.xls/.xlsx)')
 P.add_argument('--fx',type=float,help=f'RSD→EUR (default {DEF_FX})')
 P.add_argument('--sqlite',action='store_true',help='append rows to transactions.db')
+P.add_argument('--user',default=os.getenv('WALLETTASER_USER_ID','default'),
+               help='user identifier for storage segregation')
+P.add_argument('--storage-backend',choices=['local','s3'],
+               help='override storage backend (default env WALLETTASER_STORAGE_BACKEND)')
 P.add_argument('--debug',action='store_true',help='verbose logging')
 
 # ─── main ───
@@ -274,19 +352,54 @@ def main():
     df['NEEDS_WANTS']=df.apply(needs_wants,axis=1)
 
     months, net, save_proj, asv, ai, asp, ast = summary(df)
-    folder=f'finance_report_{datetime.now():%Y%m%d_%H%M%S}'; os.makedirs(folder,exist_ok=True)
 
-    # plots
-    plot_totals(folder,months,ai,asp,asv,ast)
-    plot_vendors(folder,df); plot_needs_wants(folder,df); plot_weekday(folder,df)
-    plot_hourly(folder,df); plot_monthly_trends(folder,df)
-    plot_rolling(folder,df); plot_monthly_net(folder,df)
-    plot_projected_net(folder,net); plot_projected_savings(folder,save_proj)
+    storage:Storage=get_storage(a.storage_backend)
+    user_id=a.user
+    metadata={'source_file':os.path.basename(path),'fx_rate':fx,
+              'generated_at':f'{datetime.now():%Y-%m-%dT%H:%M:%S}'}
+    result_id=storage.start_result(user_id,metadata=metadata)
 
-    df.to_csv(f'{folder}/full_enriched_dataset.csv',index=False)
+    chart_index:Dict[str,Dict[str,str]]={}
+
+    def store_chart(name:str, generator):
+        res=generator()
+        if not res:
+            return
+        image_bytes, data=res
+        img_uri=storage.save_artifact(user_id,result_id,f'{name}.png',image_bytes,'image/png',
+                                      metadata={'type':'chart','name':name})
+        data_uri=storage.save_json(user_id,result_id,f'{name}.json',data,
+                                   metadata={'type':'chart-data','name':name})
+        chart_index[name]={'image':img_uri,'data':data_uri}
+
+    store_chart('totals',lambda:chart_totals(months,ai,asp,asv,ast))
+    store_chart('vendors_top',lambda:chart_vendors(df))
+    store_chart('needs_wants',lambda:chart_needs_wants(df))
+    store_chart('weekday_spend',lambda:chart_weekday(df))
+    store_chart('hourly_spend',lambda:chart_hourly(df))
+    store_chart('monthly_trends',lambda:chart_monthly_trends(df))
+    store_chart('rolling_spend',lambda:chart_rolling(df))
+    store_chart('monthly_net',lambda:chart_monthly_net(df))
+    store_chart('projected_net',lambda:chart_projected_net(net))
+    store_chart('projected_savings',lambda:chart_projected_savings(save_proj))
+
+    csv_bytes=df.to_csv(index=False).encode('utf-8')
+    csv_uri=storage.save_artifact(user_id,result_id,'full_enriched_dataset.csv',csv_bytes,
+                                  'text/csv',metadata={'rows':len(df)})
+
     if a.sqlite:
         with sqlite3.connect('transactions.db') as con:
             df.to_sql('tx',con,if_exists='append',index=False)
+
+    manifest={'result_id':result_id,'user_id':user_id,'csv_uri':csv_uri,
+              'charts':chart_index,'generated_at':metadata['generated_at']}
+    storage.save_json(user_id,result_id,'manifest.json',manifest,metadata={'type':'manifest'})
+
+    summary_payload={'months':months,'avg_savings':asv,'avg_income':ai,'avg_spend':asp,
+                     'avg_stocks':ast,'projected_net_12m':net[-1] if net else 0,
+                     'csv_uri':csv_uri,'charts':chart_index}
+    storage.finalize_result(result_id,summary_payload)
+    storage.enforce_retention(user_id)
 
     # console summary
     today=pd.Timestamp.today().normalize()
@@ -304,7 +417,12 @@ def main():
     print('Projected pure savings (12 mo):')
     for i,v in enumerate(save_proj,1):
         print(f'  +{i:02d} mo → {fmt(v)} RSD ({fmt(v/fx)} €)')
-    print('Charts + CSV saved →', folder)
+    print('Result stored →', result_id)
+    print('CSV URI →', csv_uri)
+    if chart_index:
+        print('Charts manifest:')
+        for name,info in chart_index.items():
+            print(f'  {name}: image={info["image"]} data={info["data"]}')
 
 if __name__ == '__main__':
     main()
