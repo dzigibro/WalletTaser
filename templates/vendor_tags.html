@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Vendor Tags</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f7f9fb; color: #2c3e50; }
+    h1 { margin-bottom: 0.5rem; }
+    .actions { margin-bottom: 1.5rem; }
+    form { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    input, select, button { padding: 0.5rem; font-size: 1rem; }
+    table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    th, td { padding: 0.75rem; border-bottom: 1px solid #ecf0f1; text-align: left; }
+    tr:nth-child(even) { background: #f2f6f9; }
+    .tag-actions { display: flex; gap: 0.5rem; }
+    .danger { background: #e74c3c; color: #fff; border: none; cursor: pointer; }
+    .primary { background: #3498db; color: #fff; border: none; cursor: pointer; }
+    .message { margin-top: 1rem; color: #e67e22; }
+    @media (max-width: 600px) {
+      table, thead, tbody, th, td, tr { display: block; }
+      th { display: none; }
+      tr { margin-bottom: 1rem; }
+      td { border: none; position: relative; padding-left: 50%; }
+      td::before { content: attr(data-label); position: absolute; left: 0; width: 45%; padding-left: 1rem; font-weight: bold; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Vendor Tags for {{ user_id }}</h1>
+  <div class="actions">
+    <form id="tag-form" method="post" action="/ui/vendor-tags">
+      <input type="hidden" name="user_id" value="{{ user_id }}">
+      <label>
+        Vendor
+        <input name="vendor" placeholder="e.g. LIDL" required>
+      </label>
+      <label>
+        Class
+        <select name="class">
+          <option value="NEEDS">NEEDS</option>
+          <option value="WANTS">WANTS</option>
+        </select>
+      </label>
+      <button class="primary" type="submit">Save</button>
+    </form>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Vendor</th>
+        <th>Class</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for tag in tags %}
+      <tr>
+        <td data-label="Vendor">{{ tag.vendor }}</td>
+        <td data-label="Class">{{ tag.class }}</td>
+        <td data-label="Actions">
+          <form class="tag-actions" method="post" action="/ui/vendor-tags/{{ tag.vendor }}/delete">
+            <input type="hidden" name="user_id" value="{{ user_id }}">
+            <button class="danger" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="3">No tags yet. Add one above!</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

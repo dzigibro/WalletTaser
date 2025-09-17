@@ -11,18 +11,25 @@ Creates ./finance_report_<timestamp>/  with:
   monthly_trends.png, rolling30_spend.png (or rolling7*),
   monthly_net.png, projected_net.png,
   projected_savings.png  ⟵ NEW
-  full_enriched_dataset.csv  (+ transactions.db if --sqlite)
+  full_enriched_dataset.csv  (+ wallettaser.db if --sqlite)
 """
 from __future__ import annotations
-import argparse, csv, glob, logging, os, re, sqlite3, sys, textwrap
+import argparse, glob, logging, os, re, sqlite3, sys, textwrap
 from datetime import datetime, timedelta
 from itertools import cycle
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
-TAG_FILE = 'vendor_tags.csv'           # persistent NEEDS/WANTS map
 DEF_FX   = 117.0                       # default RSD → EUR
+DEFAULT_USER = 'default'
+CURRENT_TAGS: dict[str, str] = {}
+
+from persistence import (
+    DB_PATH,
+    VendorTagRepository,
+    apply_tagging_decisions,
+)
 
 # ─────────────────── logging ────────────────────
 def setup_logging(debug: bool) -> None:
@@ -51,11 +58,6 @@ ADVANCED_PATTERNS = {
     'MEDICAL':['apoteka','pharmacy','dr'],
     'ENTERTAINMENT':['netflix','tidal','youtube','spotify'],
 }
-try:
-    with open(TAG_FILE, newline='') as f:
-        TAGS = {r['VENDOR']: r['CLASS'] for r in csv.DictReader(f)}
-except FileNotFoundError: TAGS = {}
-
 def vendor(opis:str)->str:
     low=opis.lower()
     for v,keys in PATTERNS.items():
@@ -110,25 +112,9 @@ def load_clean(path:str)->pd.DataFrame:
     return df
 
 # ─── NEEDS/WANTS tagging ───
-def tag_new_vendors(df:pd.DataFrame)->None:
-    global TAGS
-    freq=(df['VENDOR'].value_counts()
-          .loc[lambda s:s>=3].index.difference(TAGS))
-    if not freq.empty:
-        print('\n► Tag vendors: NEEDS (n) / WANTS (w)')
-    for v in freq:
-        while True:
-            ans=input(f'  {v}: n/w? ').strip().lower()
-            if ans in ('n','w'):
-                TAGS[v]='NEEDS' if ans=='n' else 'WANTS'; break
-    if freq.any():
-        with open(TAG_FILE,'w',newline='') as f:
-            w=csv.DictWriter(f,fieldnames=['VENDOR','CLASS'])
-            w.writeheader(); [w.writerow({'VENDOR':k,'CLASS':v}) for k,v in TAGS.items()]
-
 def needs_wants(r:pd.Series)->str:
     if r['CATEGORY'] in ('SAVINGS','STOCKS/CRYPTO'): return 'TRANSFER'
-    return TAGS.get(r['VENDOR'],'WANTS')
+    return CURRENT_TAGS.get(r['VENDOR'], 'WANTS')
 
 # ─── core math ───
 def project_savings(avg_save:float, months:int=12)->list[float]:
@@ -260,8 +246,15 @@ P=argparse.ArgumentParser(
         python3 finance.py -f bank.xlsx --fx 118 --sqlite --debug'''))
 P.add_argument('-f','--file',help='bank statement (.xls/.xlsx)')
 P.add_argument('--fx',type=float,help=f'RSD→EUR (default {DEF_FX})')
-P.add_argument('--sqlite',action='store_true',help='append rows to transactions.db')
+P.add_argument('--sqlite',action='store_true',help='append rows to wallettaser.db')
 P.add_argument('--debug',action='store_true',help='verbose logging')
+P.add_argument('--user',default=DEFAULT_USER,help='user id for tagging scope')
+P.add_argument(
+    '--tag',
+    action='append',
+    default=[],
+    help='predefine vendor tags as VENDOR=CLASS (NEEDS/WANTS)'
+)
 
 # ─── main ───
 def main():
@@ -270,8 +263,22 @@ def main():
     fx=a.fx or float(input(f'RSD→EUR rate (Enter for {DEF_FX}): ') or DEF_FX)
 
     df=load_clean(path)
-    tag_new_vendors(df)
+    repo = VendorTagRepository()
+    repo.migrate_from_csv(user_id=a.user)
+    decisions = {}
+    for item in a.tag:
+        if '=' in item:
+            vendor, cls = item.split('=', 1)
+            decisions[vendor.strip().upper()] = cls.strip().upper()
+    global CURRENT_TAGS
+    CURRENT_TAGS = apply_tagging_decisions(
+        df,
+        repo,
+        a.user,
+        decisions=decisions
+    )
     df['NEEDS_WANTS']=df.apply(needs_wants,axis=1)
+    df['USER_ID']=a.user
 
     months, net, save_proj, asv, ai, asp, ast = summary(df)
     folder=f'finance_report_{datetime.now():%Y%m%d_%H%M%S}'; os.makedirs(folder,exist_ok=True)
@@ -285,8 +292,8 @@ def main():
 
     df.to_csv(f'{folder}/full_enriched_dataset.csv',index=False)
     if a.sqlite:
-        with sqlite3.connect('transactions.db') as con:
-            df.to_sql('tx',con,if_exists='append',index=False)
+        with sqlite3.connect(DB_PATH) as con:
+            df.to_sql('transactions',con,if_exists='append',index=False)
 
     # console summary
     today=pd.Timestamp.today().normalize()
