@@ -1,9 +1,11 @@
 pandas
 matplotlib
 xlrd
+openpyxl
 fastapi
 uvicorn
 python-multipart
 sqlalchemy
 celery
 redis
+pytest
