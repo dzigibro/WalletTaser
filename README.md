@@ -77,3 +77,48 @@ Use the `/statements/{job_id}` endpoint to poll for completion and
 `/statements/{job_id}/result` to download the generated ZIP archive. Each user is
 isolated to their tenant: uploads, tags, and reports are stored in
 `data/<tenant-id>/`.
+
+### API Reference (JSON)
+
+- `POST /statements/upload`
+  - Body: multipart file field `file`, optional query `fx_rate` override.
+  - Response: `{ "job_id": "...", "status": "queued", "detail_path": "/statements/<id>" }`
+- `GET /statements`
+  - Returns the newest jobs for the authenticated tenant. Example payload:
+    ```json
+    [
+      {
+        "job_id": "abc123",
+        "filename": "statement.xlsx",
+        "status": "completed",
+        "fx_rate": 117.0,
+        "created_at": "2024-05-01T12:00:00",
+        "started_at": "2024-05-01T12:00:02",
+        "completed_at": "2024-05-01T12:00:15",
+        "result_path": "data/<tenant>/archives/abc123.zip",
+        "report_directory": "data/<tenant>/reports/abc123",
+        "summary": { "average_income": 12345.0, "projected_net": [...], ... }
+      }
+    ]
+    ```
+- `GET /statements/{job_id}`
+  - Returns the same structure as above for a single job.
+- `GET /statements/{job_id}/summary`
+  - Convenience endpoint that returns `{ "job_id": "...", "summary": {...} }` once the report is ready.
+- `GET /statements/{job_id}/result`
+  - Streams the generated ZIP archive for download.
+
+### 🖼️ Web Dashboard
+
+Looking for a friendlier face on top of the API? A static frontend lives in
+`frontend/` and can be served by any HTTP server (no build step required).
+
+```bash
+cd frontend
+python -m http.server 5173
+# open http://127.0.0.1:5173 in your browser
+```
+
+Log in with the same credentials you use for the API (`demo`/`demo` by default).
+Use the dashboard to upload statements, inspect job history, pull result ZIPs,
+and review the computed summary metrics without leaving the browser.
