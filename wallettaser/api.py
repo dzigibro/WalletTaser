@@ -1,9 +1,11 @@
 """FastAPI application exposing the WalletTaser pipeline."""
 from __future__ import annotations
 
+import json
 import shutil
 import uuid
 from pathlib import Path
+from typing import Any, Dict, List
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -19,6 +21,25 @@ app = FastAPI(title="WalletTaser API")
 app.include_router(auth_router)
 
 ensure_default_user()
+
+
+def _serialize_job(job: Job) -> Dict[str, Any]:
+    """Convert a job ORM instance to a JSON-serialisable dict."""
+    return {
+        "job_id": job.id,
+        "tenant_id": job.tenant_id,
+        "filename": job.filename,
+        "status": job.status,
+        "fx_rate": job.fx_rate,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "result_path": job.result_path,
+        "report_directory": job.report_directory,
+        "error": job.error,
+        "summary": json.loads(job.summary) if job.summary else None,
+    }
 
 
 @app.on_event("startup")
@@ -38,7 +59,13 @@ def upload_statement(
 
     job_id = uuid.uuid4().hex
     tenant_id = user.tenant_id
-    job = Job(id=job_id, tenant_id=tenant_id, filename=file.filename, status="queued")
+    job = Job(
+        id=job_id,
+        tenant_id=tenant_id,
+        filename=file.filename,
+        status="queued",
+        fx_rate=fx_rate,
+    )
     session.add(job)
     session.commit()
 
@@ -51,7 +78,27 @@ def upload_statement(
 
     process_statement_task.delay(job_id, tenant_id, str(saved_path), fx_rate)
 
-    return {"job_id": job_id, "status": job.status}
+    return {
+        "job_id": job_id,
+        "status": job.status,
+        "detail_path": f"/statements/{job_id}",
+    }
+
+
+@app.get("/statements", response_model=List[Dict[str, Any]])
+def list_jobs(
+    limit: int = 25,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    jobs = (
+        session.query(Job)
+        .filter(Job.tenant_id == user.tenant_id)
+        .order_by(Job.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_serialize_job(job) for job in jobs]
 
 
 @app.get("/statements/{job_id}")
@@ -63,11 +110,23 @@ def get_job_status(
     job = session.query(Job).filter(Job.id == job_id, Job.tenant_id == user.tenant_id).first()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    return _serialize_job(job)
+
+
+@app.get("/statements/{job_id}/summary")
+def get_job_summary(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    job = session.query(Job).filter(Job.id == job_id, Job.tenant_id == user.tenant_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.summary:
+        raise HTTPException(status_code=404, detail="Summary not available")
     return {
         "job_id": job.id,
-        "status": job.status,
-        "result_path": job.result_path,
-        "error": job.error,
+        "summary": json.loads(job.summary),
     }
 
 

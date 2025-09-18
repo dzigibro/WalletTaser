@@ -1,7 +1,10 @@
 """Celery task definitions."""
 from __future__ import annotations
 
+import json
 import logging
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -22,6 +25,7 @@ def process_statement_task(self, job_id: str, tenant_id: int, statement_path: st
             logging.error("Job %s not found", job_id)
             return {"status": "missing"}
         job.status = "processing"
+        job.started_at = datetime.utcnow()
         session.commit()
 
         result = process_statement(
@@ -34,12 +38,18 @@ def process_statement_task(self, job_id: str, tenant_id: int, statement_path: st
         job.status = "completed"
         job.result_path = result["archive_path"]
         job.report_directory = result["report_directory"]
+        summary_payload = result["summary"]
+        job.fx_rate = summary_payload.fx_rate
+        job.summary = json.dumps(asdict(summary_payload))
+        job.completed_at = datetime.utcnow()
+        job.error = None
         session.commit()
         logging.info("Job %s completed", job_id)
         return {
             "status": job.status,
             "archive_path": job.result_path,
             "report_directory": job.report_directory,
+            "summary": json.loads(job.summary),
         }
     except Exception as exc:  # noqa: BLE001
         session.rollback()
@@ -48,6 +58,7 @@ def process_statement_task(self, job_id: str, tenant_id: int, statement_path: st
         if job:
             job.status = "failed"
             job.error = str(exc)
+            job.completed_at = datetime.utcnow()
             session.commit()
         raise
     finally:
