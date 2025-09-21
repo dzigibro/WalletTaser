@@ -50,6 +50,7 @@ const currencyFmt = new Intl.NumberFormat(undefined, {
 let token = null;
 const assetPreviewCache = new Map();
 let currentJobId = null;
+const dismissedVendors = new Set();
 
 if (elements.deleteJob) {
   elements.deleteJob.disabled = true;
