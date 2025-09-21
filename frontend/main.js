@@ -205,7 +205,13 @@ function renderJobs(jobs) {
     row.querySelector(".job-fx").textContent = job.fx_rate ? job.fx_rate.toFixed(2) : "—";
 
     const summaryBtn = row.querySelector(".view-summary");
-    summaryBtn.addEventListener("click", () => loadSummary(job.job_id));
+    if (summaryBtn) {
+      summaryBtn.type = "button";
+      summaryBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        loadSummary(job.job_id);
+      });
+    }
 
     const downloadLink = row.querySelector(".download");
     downloadLink.textContent = "Download";
