@@ -1,10 +1,11 @@
 """Tenant-aware wrappers around the reporting pipeline."""
 from __future__ import annotations
 
+import csv
 import os
 import zipfile
 from pathlib import Path
-from typing import TypedDict
+from typing import Dict, TypedDict
 
 from .reporting import ReportSummary, generate_report
 
@@ -34,6 +35,31 @@ def tenant_root(tenant_id: int | str) -> Path:
     return path
 
 
+def vendor_tags_path(tenant_id: int | str) -> Path:
+    return tenant_root(tenant_id) / "vendor_tags.csv"
+
+
+def load_vendor_tags(path: Path) -> Dict[str, str]:
+    if not path.exists():
+        return {}
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        return {
+            row.get("VENDOR", "").strip(): row.get("CLASS", "").strip()
+            for row in reader
+            if row.get("VENDOR") and row.get("CLASS")
+        }
+
+
+def write_vendor_tags(path: Path, tags: Dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["VENDOR", "CLASS"])
+        writer.writeheader()
+        for vendor, classification in sorted(tags.items()):
+            writer.writerow({"VENDOR": vendor, "CLASS": classification})
+
+
 def process_statement(
     *,
     tenant_id: int | str,
@@ -47,7 +73,7 @@ def process_statement(
     uploads_dir = tenant_dir / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
-    tag_file = tenant_dir / "vendor_tags.csv"
+    tag_file = vendor_tags_path(tenant_id)
 
     report_summary = generate_report(
         statement_path,

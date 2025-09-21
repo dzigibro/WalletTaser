@@ -85,6 +85,18 @@ def test_assets_listing_and_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert assets
     assert any(asset["name"].endswith("totals.png") for asset in assets)
 
+    tag_resp = client.post(
+        "/vendors",
+        json={"vendor": "LIDL", "classification": "NEEDS"},
+        headers=headers,
+    )
+    assert tag_resp.status_code == 204
+
+    vendor_list = client.get(f"/vendors?job_id={job_id}", headers=headers)
+    assert vendor_list.status_code == 200
+    vendor_payload = vendor_list.json()
+    assert any(tag["vendor"] == "LIDL" for tag in vendor_payload["tags"])
+
     first_asset = assets[0]["name"]
     file_resp = client.get(f"/statements/{job_id}/asset", params={"name": first_asset}, headers=headers)
     assert file_resp.status_code == 200
@@ -99,6 +111,9 @@ def test_assets_listing_and_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     delete_resp = client.delete(f"/statements/{job_id}", headers=headers)
     assert delete_resp.status_code == 200
+
+    clean_tag = client.delete("/vendors/LIDL", headers=headers)
+    assert clean_tag.status_code == 200
 
     after_delete = client.get(f"/statements/{job_id}", headers=headers)
     assert after_delete.status_code == 404

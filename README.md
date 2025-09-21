@@ -14,6 +14,8 @@
 - Console summary with vampire detection (parasitic vendors)
 - Browser dashboard with inline chart previews, text snippets, and one-click
   secure cleanup of generated artefacts
+- First-run vendor coaching: tag repeat spend as NEED or WANT, skip when lazy,
+  and wipe tags any time for full control
 
 ## 🐍 Requirements
 
@@ -109,6 +111,12 @@ isolated to their tenant: uploads, tags, and reports are stored in
   - Convenience endpoint that returns `{ "job_id": "...", "summary": {...} }` once the report is ready.
 - `GET /statements/{job_id}/result`
   - Streams the generated ZIP archive for download.
+- `GET /vendors?job_id=<id>`
+  - Lists saved vendor classifications and any untagged vendors from the specified job.
+- `POST /vendors`
+  - Body: `{ "vendor": "LIDL", "classification": "NEEDS" }` to remember a choice.
+- `DELETE /vendors/{vendor}`
+  - Removes a saved classification to reset future prompts.
 
 ### 🖼️ Web Dashboard
 

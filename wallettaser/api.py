@@ -8,17 +8,19 @@ import re
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel, constr
+
 from .auth import auth_router, ensure_default_user, get_current_user
 from .database import Base, engine, get_session
 from .models import Job, User
-from .pipeline import get_data_root
+from .pipeline import get_data_root, load_vendor_tags, vendor_tags_path, write_vendor_tags
 from .tasks import process_statement_task
 
 app = FastAPI(title="WalletTaser API")
@@ -77,6 +79,19 @@ def _get_owned_job(session: Session, job_id: str, tenant_id: int) -> Job:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+def _load_vendor_tags_for_tenant(tenant_id: int | str) -> Dict[str, str]:
+    return load_vendor_tags(vendor_tags_path(tenant_id))
+
+
+def _write_vendor_tags_for_tenant(tenant_id: int | str, tags: Dict[str, str]) -> None:
+    write_vendor_tags(vendor_tags_path(tenant_id), tags)
+
+
+class VendorTagPayload(BaseModel):
+    vendor: constr(strip_whitespace=True, min_length=1)
+    classification: Literal["NEEDS", "WANTS", "needs", "wants"]
 
 
 def _safe_remove(paths: Iterable[Path]) -> None:
@@ -264,6 +279,65 @@ def get_job_asset(
 
     media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
     return FileResponse(file_path, media_type=media_type, filename=file_path.name)
+
+
+@app.get("/vendors")
+def list_vendor_tags(
+    job_id: str | None = None,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    tags = _load_vendor_tags_for_tenant(user.tenant_id)
+    tag_list = [
+        {"vendor": vendor, "classification": classification}
+        for vendor, classification in sorted(tags.items())
+    ]
+
+    untagged: List[str] = []
+    if job_id:
+        job = _get_owned_job(session, job_id, user.tenant_id)
+        if job.summary:
+            try:
+                summary_data = json.loads(job.summary)
+                candidates = summary_data.get("untagged_vendors", []) or []
+                untagged = [
+                    vendor
+                    for vendor in candidates
+                    if isinstance(vendor, str) and vendor not in tags
+                ]
+            except json.JSONDecodeError:
+                untagged = []
+
+    return {"tags": tag_list, "untagged": untagged}
+
+
+@app.post("/vendors", status_code=204)
+def upsert_vendor_tag(
+    payload: VendorTagPayload,
+    user: User = Depends(get_current_user),
+):
+    vendor = payload.vendor.strip().upper()
+    classification = payload.classification.upper()
+    if classification not in {"NEEDS", "WANTS"}:
+        raise HTTPException(status_code=400, detail="classification must be NEEDS or WANTS")
+    tags = _load_vendor_tags_for_tenant(user.tenant_id)
+    tags[vendor] = classification
+    _write_vendor_tags_for_tenant(user.tenant_id, tags)
+    return None
+
+
+@app.delete("/vendors/{vendor}")
+def delete_vendor_tag(
+    vendor: str,
+    user: User = Depends(get_current_user),
+):
+    target = vendor.strip().upper()
+    tags = _load_vendor_tags_for_tenant(user.tenant_id)
+    if target not in tags:
+        raise HTTPException(status_code=404, detail="Vendor tag not found")
+    tags.pop(target, None)
+    _write_vendor_tags_for_tenant(user.tenant_id, tags)
+    return {"vendor": target, "status": "deleted"}
 
 
 @app.delete("/statements/{job_id}")

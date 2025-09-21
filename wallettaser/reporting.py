@@ -39,6 +39,7 @@ class ReportSummary:
     needs_spend: float
     wants_spend: float
     vampire_breakdown: list[dict[str, float]] = field(default_factory=list)
+    untagged_vendors: list[str] = field(default_factory=list)
 
 
 def _load_tags(tag_file: Path) -> dict[str, str]:
@@ -281,6 +282,11 @@ def generate_report(
         .sort_values(ascending=False)
     )
     total_spend = float(spend_by_vendor.sum())
+    untagged_vendors = [
+        vendor
+        for vendor in spend_by_vendor.index
+        if vendor not in tags
+    ][:8]
     vampire_breakdown: list[dict[str, float]] = []
     if total_spend > 0:
         for vendor, amount in spend_by_vendor.items():
@@ -332,6 +338,7 @@ def generate_report(
         needs_spend=round(needs_spend, 2),
         wants_spend=round(wants_spend, 2),
         vampire_breakdown=vampire_breakdown,
+        untagged_vendors=untagged_vendors,
     )
 
     metadata_path = output_folder / "metadata.json"

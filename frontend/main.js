@@ -182,6 +182,7 @@ function logout() {
   clearAssetPreviews();
   setStatus(elements.assetsStatus, "");
   currentJobId = null;
+  dismissedVendors.clear();
   const cfg = currentConfig();
   saveConfig({ ...cfg });
 }
@@ -236,6 +237,7 @@ async function refreshJobList() {
 
 async function loadSummary(jobId) {
   if (!ensureLoggedIn()) return;
+  dismissedVendors.clear();
   elements.summaryCard.hidden = false;
   elements.summaryJob.textContent = jobId;
   setStatus(elements.summaryStatus, "Loading summary…");
@@ -257,6 +259,7 @@ async function loadSummary(jobId) {
     }
     setStatus(elements.assetsStatus, "Loading receipts…");
     await loadAssets(jobId);
+    await refreshVendorCoach(jobId, summary);
   } catch (error) {
     console.error(error);
     setStatus(elements.summaryStatus, error.message || "Failed to load summary", { error: true });
@@ -600,6 +603,32 @@ function renderSummary(summary) {
   if (clarityCard) {
     elements.summaryContent.appendChild(clarityCard);
   }
+
+  const tagCard = createTagCoachSkeleton();
+  elements.summaryContent.appendChild(tagCard);
+}
+
+function createTagCoachSkeleton() {
+  const card = document.createElement("section");
+  card.id = "tag-coach";
+  card.className = "tag-card";
+
+  const header = document.createElement("header");
+  header.className = "tag-header";
+  header.innerHTML = "<h4>Tag your regulars</h4><span>Tell WalletTaser what counts as a need vs. a want.</span>";
+  card.appendChild(header);
+
+  const statusLine = document.createElement("p");
+  statusLine.className = "status tag-status";
+  statusLine.textContent = "Checking your favourites…";
+  card.appendChild(statusLine);
+
+  const body = document.createElement("div");
+  body.className = "tag-body";
+  body.textContent = "Hang tight while we load your vendors.";
+  card.appendChild(body);
+
+  return card;
 }
 
 async function uploadStatement(event) {
@@ -776,6 +805,210 @@ async function renderAssets(jobId, assets) {
   }
   const plural = assets.length === 1 ? "receipt" : "receipts";
   setStatus(elements.assetsStatus, `${assets.length} ${plural} ready. Tap to zoom or download.`);
+}
+
+async function refreshVendorCoach(jobId, summary) {
+  const card = document.querySelector("#tag-coach");
+  if (!card) return;
+  const statusLine = card.querySelector(".tag-status");
+  if (statusLine) {
+    statusLine.classList.remove("error");
+    statusLine.textContent = "Loading personalised tags…";
+  }
+
+  try {
+    const query = jobId ? `?job_id=${encodeURIComponent(jobId)}` : "";
+    const response = await authFetch(`/vendors${query}`);
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || response.statusText);
+    }
+    const payload = await response.json();
+    const tags = Array.isArray(payload.tags) ? payload.tags : [];
+    const rawUntagged = Array.isArray(payload.untagged) ? payload.untagged : [];
+    const fallbackUntagged = Array.isArray(summary?.untagged_vendors) ? summary.untagged_vendors : [];
+    const merged = [...new Set([...rawUntagged, ...fallbackUntagged])];
+    const untagged = merged.filter((vendor) => !tags.some((tag) => tag.vendor === vendor));
+    populateTagCoach(card, { tags, untagged }, jobId, summary);
+  } catch (error) {
+    console.error(error);
+    if (statusLine) {
+      statusLine.textContent = error.message || "Failed to load tags";
+      statusLine.classList.add("error");
+    } else {
+      card.innerHTML = `<p class="status error">${error.message || "Failed to load tags"}</p>`;
+    }
+  }
+}
+
+function populateTagCoach(card, data, jobId, summary) {
+  card.innerHTML = "";
+
+  const header = document.createElement("header");
+  header.className = "tag-header";
+  header.innerHTML = "<h4>Tag your regulars</h4><span>Needs vs wants guides your future coaching.</span>";
+  card.appendChild(header);
+
+  const statusLine = document.createElement("p");
+  statusLine.className = "status tag-status";
+  card.appendChild(statusLine);
+
+  const body = document.createElement("div");
+  body.className = "tag-body";
+
+  const untagged = (data.untagged || []).filter((vendor) => !dismissedVendors.has(vendor));
+  if (untagged.length) {
+    const list = document.createElement("ul");
+    list.className = "untagged-list";
+    untagged.slice(0, 6).forEach((vendor) => {
+      const item = document.createElement("li");
+      item.className = "tag-item";
+
+      const name = document.createElement("strong");
+      name.textContent = vendor;
+
+      const actions = document.createElement("div");
+      actions.className = "tag-actions";
+
+      const needBtn = createActionButton("Need", () => classifyVendorTag(vendor, "NEEDS", jobId, summary, statusLine), "primary");
+      const wantBtn = createActionButton("Want", () => classifyVendorTag(vendor, "WANTS", jobId, summary, statusLine), "primary");
+      const skipBtn = createActionButton("Skip", () => skipVendorTag(vendor, item, statusLine), "ghost");
+
+      actions.append(needBtn, wantBtn, skipBtn);
+      item.append(name, actions);
+      list.appendChild(item);
+    });
+
+    body.appendChild(list);
+  } else {
+    const empty = document.createElement("p");
+    empty.className = "tag-empty";
+    empty.textContent = "All your frequent vendors are tagged. Nice!";
+    body.appendChild(empty);
+  }
+  statusLine.textContent = untagged.length
+    ? "Pick Need or Want to train your budget coach."
+    : "Nothing to tag right now.";
+
+  const savedHeader = document.createElement("div");
+  savedHeader.className = "tag-subheader";
+  savedHeader.textContent = "Saved choices";
+  body.appendChild(savedHeader);
+
+  const tags = Array.isArray(data.tags) ? data.tags : [];
+  if (tags.length) {
+    const pillRow = document.createElement("div");
+    pillRow.className = "tag-pill-row";
+    tags.sort((a, b) => a.vendor.localeCompare(b.vendor)).forEach((entry) => {
+      const pill = document.createElement("div");
+      pill.className = "tag-pill";
+
+      const vendorName = document.createElement("strong");
+      vendorName.textContent = entry.vendor;
+
+      const classLabel = document.createElement("span");
+      classLabel.textContent = entry.classification === "NEEDS" ? "Need" : "Want";
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "pill-delete";
+      deleteBtn.textContent = "×";
+      deleteBtn.setAttribute("aria-label", `Delete tag for ${entry.vendor}`);
+      deleteBtn.addEventListener("click", () => deleteVendorTag(entry.vendor, jobId, summary, statusLine));
+
+      pill.append(vendorName, classLabel, deleteBtn);
+      pillRow.appendChild(pill);
+    });
+    body.appendChild(pillRow);
+  } else {
+    const none = document.createElement("p");
+    none.className = "tag-empty";
+    none.textContent = "No custom tags yet. Teach WalletTaser what matters.";
+    body.appendChild(none);
+  }
+
+  const footer = document.createElement("p");
+  footer.className = "tag-footer";
+  footer.textContent = "You can delete tags any time. Choices stay on your machine.";
+  body.appendChild(footer);
+
+  card.appendChild(body);
+}
+
+async function classifyVendorTag(vendor, classification, jobId, summary, statusLine) {
+  if (!ensureLoggedIn()) return;
+  dismissedVendors.delete(vendor);
+  const label = classification === "NEEDS" ? "Need" : "Want";
+  if (statusLine) {
+    statusLine.classList.remove("error");
+    statusLine.textContent = `Saving ${vendor} as ${label}…`;
+  }
+  try {
+    const response = await authFetch(`/vendors`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vendor, classification }),
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || response.statusText);
+    }
+    if (Array.isArray(summary?.untagged_vendors)) {
+      summary.untagged_vendors = summary.untagged_vendors.filter((name) => name !== vendor);
+    }
+    if (statusLine) {
+      statusLine.textContent = `${vendor} tagged as ${label}.`;
+    }
+    await refreshVendorCoach(jobId, summary);
+  } catch (error) {
+    console.error(error);
+    if (statusLine) {
+      statusLine.textContent = error.message || "Failed to save tag";
+      statusLine.classList.add("error");
+    }
+  }
+}
+
+function skipVendorTag(vendor, element, statusLine) {
+  dismissedVendors.add(vendor);
+  if (element) {
+    element.remove();
+  }
+  if (statusLine) {
+    statusLine.classList.remove("error");
+    statusLine.textContent = `Okay, we'll ask about ${vendor} later.`;
+  }
+}
+
+async function deleteVendorTag(vendor, jobId, summary, statusLine) {
+  if (!ensureLoggedIn()) return;
+  if (statusLine) {
+    statusLine.classList.remove("error");
+    statusLine.textContent = `Deleting tag for ${vendor}…`;
+  }
+  try {
+    const response = await authFetch(`/vendors/${encodeURIComponent(vendor)}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || response.statusText);
+    }
+    dismissedVendors.delete(vendor);
+    if (Array.isArray(summary?.untagged_vendors) && !summary.untagged_vendors.includes(vendor)) {
+      summary.untagged_vendors.push(vendor);
+    }
+    if (statusLine) {
+      statusLine.textContent = `${vendor} removed. We'll ask again next time.`;
+    }
+    await refreshVendorCoach(jobId, summary);
+  } catch (error) {
+    console.error(error);
+    if (statusLine) {
+      statusLine.textContent = error.message || "Failed to delete tag";
+      statusLine.classList.add("error");
+    }
+  }
 }
 
 function getAssetKey(jobId, assetName) {
@@ -1016,6 +1249,7 @@ async function deleteCurrentJob() {
     elements.summaryCard.hidden = true;
     elements.summaryJob.textContent = "";
     currentJobId = null;
+    dismissedVendors.clear();
     if (elements.deleteJob) {
       elements.deleteJob.disabled = true;
     }

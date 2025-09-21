@@ -80,6 +80,7 @@ def test_generate_report_summary(tmp_path: Path, sample_statement: Path) -> None
     if summary.vampire_breakdown:
         breakdown_vendors = {entry["vendor"] for entry in summary.vampire_breakdown}
         assert {"LIDL", "CAR GO", "BANKOMAT"} & breakdown_vendors
+    assert summary.untagged_vendors
     assert summary.fx_rate == pytest.approx(117.0)
 
     metadata_path = output_dir / "metadata.json"
@@ -90,6 +91,7 @@ def test_generate_report_summary(tmp_path: Path, sample_statement: Path) -> None
     assert payload["projected_savings"][-1] == summary.projected_savings[-1]
     assert payload["net_flow"] == summary.net_flow
     assert payload["total_spend"] == summary.total_spend
+    assert payload["untagged_vendors"] == summary.untagged_vendors
 
 
 def test_process_statement_creates_artifacts(
@@ -127,6 +129,7 @@ def test_process_statement_creates_artifacts(
     assert summary.fx_rate == pytest.approx(110.5)
     assert summary.total_spend > 0
     assert summary.vampire_breakdown
+    assert isinstance(summary.untagged_vendors, list)
 
     # check tenant isolation paths
     assert data_root in report_dir.parents
