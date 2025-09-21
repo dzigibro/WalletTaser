@@ -44,11 +44,14 @@ def load_vendor_tags(path: Path) -> Dict[str, str]:
         return {}
     with path.open(newline="") as handle:
         reader = csv.DictReader(handle)
-        return {
-            row.get("VENDOR", "").strip(): row.get("CLASS", "").strip()
-            for row in reader
-            if row.get("VENDOR") and row.get("CLASS")
-        }
+        tags: Dict[str, str] = {}
+        for row in reader:
+            vendor = (row.get("VENDOR") or "").strip().upper()
+            classification = (row.get("CLASS") or "").strip().upper()
+            if not vendor or classification not in {"NEEDS", "WANTS"}:
+                continue
+            tags[vendor] = classification
+        return tags
 
 
 def write_vendor_tags(path: Path, tags: Dict[str, str]) -> None:
@@ -57,7 +60,12 @@ def write_vendor_tags(path: Path, tags: Dict[str, str]) -> None:
         writer = csv.DictWriter(handle, fieldnames=["VENDOR", "CLASS"])
         writer.writeheader()
         for vendor, classification in sorted(tags.items()):
-            writer.writerow({"VENDOR": vendor, "CLASS": classification})
+            writer.writerow(
+                {
+                    "VENDOR": (vendor or "").strip().upper(),
+                    "CLASS": (classification or "").strip().upper(),
+                }
+            )
 
 
 def process_statement(

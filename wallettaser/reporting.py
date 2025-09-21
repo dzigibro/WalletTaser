@@ -77,13 +77,21 @@ def _load_tags(tag_file: Path) -> dict[str, str]:
     if not tag_file.exists():
         return {}
     with tag_file.open(newline="") as handle:
-        return {row["VENDOR"]: row["CLASS"] for row in csv.DictReader(handle)}
+        tags: dict[str, str] = {}
+        for row in csv.DictReader(handle):
+            vendor = (row.get("VENDOR") or "").strip().upper()
+            classification = (row.get("CLASS") or "").strip().upper()
+            if not vendor or classification not in {"NEEDS", "WANTS"}:
+                continue
+            tags[vendor] = classification
+        return tags
 
 
 def _needs_wants(row: pd.Series, tags: dict[str, str]) -> str:
     if row["CATEGORY"] in ("SAVINGS", "STOCKS/CRYPTO"):
         return "TRANSFER"
-    vendor_tag = tags.get(row["VENDOR"])
+    vendor_key = str(row["VENDOR"]).strip().upper()
+    vendor_tag = tags.get(vendor_key)
     if vendor_tag:
         return vendor_tag
     # default to WANTS to avoid silently promoting unknown vendors
