@@ -21,6 +21,8 @@ const elements = {
   summaryJob: document.querySelector("#summary-job"),
   summaryContent: document.querySelector("#summary-content"),
   summaryStatus: document.querySelector("#summary-status"),
+  assetsStatus: document.querySelector("#assets-status"),
+  assetsGrid: document.querySelector("#assets-grid"),
   jobRowTemplate: document.querySelector("#job-row-template"),
 };
 
@@ -31,6 +33,7 @@ const currencyFmt = new Intl.NumberFormat(undefined, {
 });
 
 let token = null;
+const activeAssetUrls = [];
 
 function loadConfig() {
   try {
@@ -51,6 +54,31 @@ function setStatus(target, message, { error = false } = {}) {
   if (!target) return;
   target.textContent = message ?? "";
   target.classList.toggle("error", Boolean(error));
+}
+
+function clearAssetPreviews() {
+  while (activeAssetUrls.length) {
+    const url = activeAssetUrls.pop();
+    URL.revokeObjectURL(url);
+  }
+  if (elements.assetsGrid) {
+    elements.assetsGrid.replaceChildren();
+  }
+}
+
+function formatBytes(size) {
+  if (!Number.isFinite(size) || size <= 0) {
+    return "";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let value = size;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const decimals = value >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(decimals)} ${units[unitIndex]}`;
 }
 
 function toggleApp(active) {
@@ -137,6 +165,8 @@ function logout() {
   elements.tokenPreview.textContent = "";
   elements.summaryCard.hidden = true;
   elements.jobsTable.replaceChildren();
+  clearAssetPreviews();
+  setStatus(elements.assetsStatus, "");
   const cfg = currentConfig();
   saveConfig({ ...cfg });
 }
@@ -230,9 +260,12 @@ async function loadSummary(jobId) {
     const summary = payload.summary;
     renderSummary(summary);
     setStatus(elements.summaryStatus, "Summary loaded.");
+    await loadAssets(jobId);
   } catch (error) {
     console.error(error);
     setStatus(elements.summaryStatus, error.message || "Failed to load summary", { error: true });
+    clearAssetPreviews();
+    setStatus(elements.assetsStatus, "", { error: false });
   }
 }
 
@@ -336,6 +369,118 @@ async function downloadArchive(jobId, filename) {
   } catch (error) {
     console.error(error);
     setStatus(elements.jobsStatus, error.message || "Download failed", { error: true });
+  }
+}
+
+async function loadAssets(jobId) {
+  setStatus(elements.assetsStatus, "Loading assets…");
+  elements.assetsGrid.replaceChildren();
+  try {
+    const response = await authFetch(`/statements/${jobId}/assets`);
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || response.statusText);
+    }
+    const payload = await response.json();
+    const assets = payload.assets || [];
+    await renderAssets(jobId, assets);
+  } catch (error) {
+    console.error(error);
+    setStatus(elements.assetsStatus, error.message || "Failed to load assets", { error: true });
+  }
+}
+
+async function renderAssets(jobId, assets) {
+  clearAssetPreviews();
+  elements.assetsGrid.replaceChildren();
+  if (!assets.length) {
+    setStatus(elements.assetsStatus, "No report assets available yet.");
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  const previewPromises = [];
+
+  assets.forEach((asset) => {
+    const card = document.createElement("div");
+    card.className = "asset-card";
+
+    const header = document.createElement("header");
+    const title = document.createElement("strong");
+    title.textContent = asset.name;
+    const meta = document.createElement("span");
+    meta.className = "asset-meta";
+    meta.textContent = [asset.content_type, formatBytes(asset.size)].filter(Boolean).join(" · ");
+    header.append(title, meta);
+    card.appendChild(header);
+
+    if (asset.content_type && asset.content_type.startsWith("image/")) {
+      const img = document.createElement("img");
+      img.alt = asset.name;
+      img.loading = "lazy";
+      card.appendChild(img);
+      const previewPromise = fetchAssetBlob(jobId, asset.name)
+        .then((blob) => {
+          const url = URL.createObjectURL(blob);
+          img.src = url;
+          activeAssetUrls.push(url);
+        })
+        .catch((error) => {
+          console.error("Failed to render asset", asset.name, error);
+          img.replaceWith(document.createTextNode("Preview unavailable"));
+        });
+      previewPromises.push(previewPromise);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "asset-actions";
+    const downloadBtn = document.createElement("button");
+    downloadBtn.className = "ghost";
+    downloadBtn.type = "button";
+    downloadBtn.textContent = "Download";
+    downloadBtn.addEventListener("click", () => downloadAsset(jobId, asset.name));
+    actions.appendChild(downloadBtn);
+    card.appendChild(actions);
+
+    fragment.appendChild(card);
+  });
+
+  elements.assetsGrid.appendChild(fragment);
+  if (previewPromises.length) {
+    await Promise.allSettled(previewPromises);
+  }
+  setStatus(elements.assetsStatus, `${assets.length} asset(s) ready.`);
+}
+
+async function fetchAssetBlob(jobId, assetName) {
+  const response = await authFetch(`/statements/${jobId}/asset?name=${encodeURIComponent(assetName)}`);
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(detail.detail || response.statusText);
+  }
+  return response.blob();
+}
+
+async function downloadAsset(jobId, assetName) {
+  if (!ensureLoggedIn()) return;
+  setStatus(elements.assetsStatus, `Downloading ${assetName}…`);
+  try {
+    const response = await authFetch(`/statements/${jobId}/asset?name=${encodeURIComponent(assetName)}`);
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || response.statusText);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = assetName.split("/").pop() || assetName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setStatus(elements.assetsStatus, `Downloaded ${assetName}.`);
+  } catch (error) {
+    console.error(error);
+    setStatus(elements.assetsStatus, error.message || "Download failed", { error: true });
   }
 }
 

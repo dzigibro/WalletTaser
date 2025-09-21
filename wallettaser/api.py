@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import re
 import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -34,6 +35,7 @@ ensure_default_user()
 
 
 ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".csv"}
+ALLOWED_ASSET_EXTENSIONS = {".png", ".csv", ".json"}
 _FILENAME_SANITIZER = re.compile(r"[^A-Za-z0-9._-]")
 
 
@@ -67,6 +69,13 @@ def _serialize_job(job: Job) -> Dict[str, Any]:
         "error": job.error,
         "summary": json.loads(job.summary) if job.summary else None,
     }
+
+
+def _get_owned_job(session: Session, job_id: str, tenant_id: int) -> Job:
+    job = session.query(Job).filter(Job.id == job_id, Job.tenant_id == tenant_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @app.on_event("startup")
@@ -134,9 +143,7 @@ def get_job_status(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    job = session.query(Job).filter(Job.id == job_id, Job.tenant_id == user.tenant_id).first()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _get_owned_job(session, job_id, user.tenant_id)
     return _serialize_job(job)
 
 
@@ -146,9 +153,7 @@ def get_job_summary(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    job = session.query(Job).filter(Job.id == job_id, Job.tenant_id == user.tenant_id).first()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _get_owned_job(session, job_id, user.tenant_id)
     if not job.summary:
         raise HTTPException(status_code=404, detail="Summary not available")
     return {
@@ -163,9 +168,7 @@ def download_result(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    job = session.query(Job).filter(Job.id == job_id, Job.tenant_id == user.tenant_id).first()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = _get_owned_job(session, job_id, user.tenant_id)
     if job.status != "completed" or not job.result_path:
         raise HTTPException(status_code=400, detail="Job not completed")
 
@@ -173,3 +176,75 @@ def download_result(
     if not archive_path.exists():
         raise HTTPException(status_code=404, detail="Result missing")
     return FileResponse(archive_path, media_type="application/zip", filename=archive_path.name)
+
+
+@app.get("/statements/{job_id}/assets")
+def list_job_assets(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    job = _get_owned_job(session, job_id, user.tenant_id)
+    if job.status != "completed" or not job.report_directory:
+        raise HTTPException(status_code=400, detail="Job not completed")
+
+    report_dir = Path(job.report_directory)
+    if not report_dir.exists():
+        raise HTTPException(status_code=404, detail="Report directory missing")
+
+    assets: List[Dict[str, Any]] = []
+    for path in report_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        suffix = path.suffix.lower()
+        if suffix not in ALLOWED_ASSET_EXTENSIONS:
+            continue
+        relative_name = path.relative_to(report_dir).as_posix()
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        assets.append(
+            {
+                "name": relative_name,
+                "size": path.stat().st_size,
+                "content_type": content_type,
+            }
+        )
+    assets.sort(key=lambda item: item["name"])
+    return {"assets": assets}
+
+
+@app.get("/statements/{job_id}/asset")
+def get_job_asset(
+    job_id: str,
+    name: str = Query(..., min_length=1),
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    job = _get_owned_job(session, job_id, user.tenant_id)
+    if job.status != "completed" or not job.report_directory:
+        raise HTTPException(status_code=400, detail="Job not completed")
+
+    report_dir = Path(job.report_directory)
+    if not report_dir.exists():
+        raise HTTPException(status_code=404, detail="Report directory missing")
+
+    requested = Path(name)
+    if requested.is_absolute() or any(part == ".." for part in requested.parts):
+        raise HTTPException(status_code=400, detail="Invalid asset path")
+
+    file_path = (report_dir / requested).resolve()
+    try:
+        report_root = report_dir.resolve()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Report directory missing")
+
+    if report_root not in file_path.parents:
+        raise HTTPException(status_code=400, detail="Invalid asset path")
+
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    if file_path.suffix.lower() not in ALLOWED_ASSET_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Unsupported asset type")
+
+    media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    return FileResponse(file_path, media_type=media_type, filename=file_path.name)

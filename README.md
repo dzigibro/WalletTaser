@@ -120,8 +120,9 @@ python -m http.server 5173
 ```
 
 Log in with the same credentials you use for the API (`demo`/`demo` by default).
-Use the dashboard to upload statements, inspect job history, pull result ZIPs,
-and review the computed summary metrics without leaving the browser.
+Use the dashboard to upload statements, inspect job history, stream the
+generated charts/CSV assets inline, and grab the ZIP only if you want the raw
+files.
 
 ### 🐳 Docker Quickstart
 
