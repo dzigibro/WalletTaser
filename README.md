@@ -122,3 +122,21 @@ python -m http.server 5173
 Log in with the same credentials you use for the API (`demo`/`demo` by default).
 Use the dashboard to upload statements, inspect job history, pull result ZIPs,
 and review the computed summary metrics without leaving the browser.
+
+### 🐳 Docker Quickstart
+
+Spin up the whole stack (API + Celery worker + Redis + dashboard) in one shot:
+
+```bash
+docker compose up --build -d
+```
+
+- API: http://127.0.0.1:8000
+- Dashboard: http://127.0.0.1:8080 (configure API URL to `http://api:8000` if you
+  access it from another container, otherwise keep `http://127.0.0.1:8000`).
+- Persistent artefacts land under the `data/` named volume (`wallettaser.db`,
+  generated reports, archives, and vendor tags).
+
+Uploads are restricted to Excel/CSV files (`.xls`, `.xlsx`, `.csv`). Filenames are
+sanitized and rewritten per job to keep the storage area clean and mitigate
+obvious upload shenanigans.

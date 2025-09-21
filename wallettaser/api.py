@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -21,6 +22,23 @@ app = FastAPI(title="WalletTaser API")
 app.include_router(auth_router)
 
 ensure_default_user()
+
+
+ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".csv"}
+_FILENAME_SANITIZER = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _sanitize_upload_filename(filename: str) -> str:
+    """Return a safe filename limited to allowed extensions."""
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename required")
+    name = Path(filename).name
+    suffix = Path(name).suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
+    stem = Path(name).stem
+    safe_stem = _FILENAME_SANITIZER.sub("_", stem)[:40] or "statement"
+    return f"{safe_stem}{suffix}"
 
 
 def _serialize_job(job: Job) -> Dict[str, Any]:
@@ -54,15 +72,14 @@ def upload_statement(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="filename required")
-
     job_id = uuid.uuid4().hex
     tenant_id = user.tenant_id
+    sanitized_name = _sanitize_upload_filename(file.filename)
+    suffix = Path(sanitized_name).suffix
     job = Job(
         id=job_id,
         tenant_id=tenant_id,
-        filename=file.filename,
+        filename=sanitized_name,
         status="queued",
         fx_rate=fx_rate,
     )
@@ -71,7 +88,8 @@ def upload_statement(
 
     tenant_root = get_data_root() / str(tenant_id) / "uploads" / job_id
     tenant_root.mkdir(parents=True, exist_ok=True)
-    saved_path = tenant_root / file.filename
+    stored_filename = f"{job_id}{suffix}"
+    saved_path = tenant_root / stored_filename
     with saved_path.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     file.file.close()
