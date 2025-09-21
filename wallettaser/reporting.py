@@ -13,8 +13,38 @@ from typing import Iterable
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from cycler import cycler
 
 from finance import DEF_FX, fmt, load_clean, summary
+
+
+plt.style.use("seaborn-v0_8-darkgrid")
+plt.rcParams.update(
+    {
+        "figure.facecolor": "#0f172a",
+        "axes.facecolor": "#091125",
+        "axes.edgecolor": "#1e293b",
+        "axes.grid": True,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "grid.color": "#1e293b",
+        "grid.alpha": 0.55,
+        "text.color": "#e2e8f0",
+        "axes.labelcolor": "#cbd5f5",
+        "xtick.color": "#cbd5f5",
+        "ytick.color": "#cbd5f5",
+        "font.size": 11,
+        "axes.prop_cycle": cycler(
+            color=[
+                "#38bdf8",
+                "#a855f7",
+                "#22c55e",
+                "#f97316",
+                "#facc15",
+            ]
+        ),
+    }
+)
 
 
 @dataclass
@@ -62,19 +92,33 @@ def _needs_wants(row: pd.Series, tags: dict[str, str]) -> str:
 def _plot_totals(folder: Path, months: int, income: float, spend: float, savings: float, stocks: float) -> None:
     labels = ["Spend", "Save", "Stocks", "Income"]
     values = [abs(spend) * months, savings * months, stocks * months, income * months]
-    plt.figure(figsize=(8, 4))
-    bars = plt.bar(labels, values, color=["#e74c3c", "#27ae60", "#8e44ad", "#3498db"])
+    colors = ["#f97316", "#22d3ee", "#a855f7", "#38bdf8"]
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    bars = ax.bar(labels, values, color=colors, edgecolor="#0f172a", linewidth=1.2)
+
     for bar, value in zip(bars, values):
-        plt.text(bar.get_x() + bar.get_width() / 2, value, fmt(value),
-                 ha="center", va="bottom", fontsize=9)
-    plt.title("Totals by Category")
-    plt.ylabel("RSD")
-    plt.tight_layout()
-    plt.savefig(folder / "totals.png")
-    plt.close()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            value * 1.03,
+            fmt(value),
+            ha="center",
+            va="bottom",
+            fontsize=11,
+            color="#f8fafc",
+        )
+
+    ax.set_title("Totals by category", fontsize=14, color="#f8fafc", pad=14)
+    ax.set_ylabel("RSD")
+    ax.set_axisbelow(True)
+    ax.spines["bottom"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(folder / "totals.png", dpi=180)
+    plt.close(fig)
 
 
-TOP_COLORS = cycle(["#e74c3c", "#f1c40f", "#27ae60"])
+TOP_COLORS = cycle(["#f97316", "#facc15", "#ef4444", "#a855f7", "#22d3ee"])
 
 
 def _plot_vendors(folder: Path, df: pd.DataFrame) -> None:
@@ -84,32 +128,47 @@ def _plot_vendors(folder: Path, df: pd.DataFrame) -> None:
         .sum()
         .abs()
         .sort_values(ascending=False)
-        .head(10)
+        .head(8)
     )
-    colors = [next(TOP_COLORS) if i < 3 else "#2980b9" for i in range(len(top))]
-    plt.figure(figsize=(10, 6))
-    bars = plt.bar(top.index, top.values, color=colors)
+    if top.empty:
+        return
+    colors = [next(TOP_COLORS) for _ in range(len(top))]
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    bars = ax.bar(top.index, top.values, color=colors, linewidth=0)
     for bar, value in zip(bars, top.values):
-        plt.text(bar.get_x() + bar.get_width() / 2, value, fmt(value),
-                 ha="center", va="bottom", fontsize=9)
-    plt.title("Top Vendor Spend")
-    plt.ylabel("RSD")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig(folder / "vendors_top.png")
-    plt.close()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            value * 1.02,
+            fmt(value),
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            color="#f8fafc",
+        )
+    ax.set_title("Where your cash actually went", fontsize=14, pad=16)
+    ax.set_ylabel("RSD")
+    ax.set_xticklabels(top.index, rotation=35, ha="right")
+    ax.spines["bottom"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(folder / "vendors_top.png", dpi=180)
+    plt.close(fig)
 
 
 def _plot_weekday(folder: Path, df: pd.DataFrame) -> None:
     wk = df[df.Iznos < 0].groupby("DAY")["Iznos"].sum()
-    plt.figure(figsize=(8, 4))
-    wk.plot(kind="bar", color="#c0392b")
-    plt.title("Spending by Weekday")
-    plt.ylabel("RSD")
-    plt.xticks(range(7), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
-    plt.tight_layout()
-    plt.savefig(folder / "weekday_spend.png")
-    plt.close()
+    if wk.empty:
+        return
+    fig, ax = plt.subplots(figsize=(8, 4.2))
+    colors = ["#38bdf8" if day < 5 else "#f97316" for day in wk.index]
+    ax.bar(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], wk.reindex(range(7), fill_value=0), color=colors)
+    ax.set_title("Weekday damage", fontsize=13, pad=12)
+    ax.set_ylabel("RSD")
+    ax.spines["bottom"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(folder / "weekday_spend.png", dpi=160)
+    plt.close(fig)
 
 
 def _plot_hourly(folder: Path, df: pd.DataFrame) -> None:
@@ -117,15 +176,18 @@ def _plot_hourly(folder: Path, df: pd.DataFrame) -> None:
     if hr.sum() == 0 or hr.nunique() <= 1:
         return
     hr = hr.reindex(range(24), fill_value=0)
-    plt.figure(figsize=(14, 4))
-    hr.plot(kind="bar", color="#9b59b6")
-    plt.grid(axis="y", alpha=0.3)
-    plt.title("Spending by Hour (0-23)")
-    plt.xlabel("Hour")
-    plt.ylabel("RSD")
-    plt.tight_layout()
-    plt.savefig(folder / "hourly_spend.png")
-    plt.close()
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.plot(hr.index, hr.values, color="#a855f7", linewidth=2.2, marker="o", markersize=4)
+    ax.fill_between(hr.index, hr.values, color="#a855f7", alpha=0.18)
+    ax.set_title("When the swipes happen", fontsize=13, pad=12)
+    ax.set_xlabel("Hour of day")
+    ax.set_ylabel("RSD")
+    ax.set_xlim(0, 23)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(folder / "hourly_spend.png", dpi=160)
+    plt.close(fig)
 
 
 def _plot_monthly_trends(folder: Path, df: pd.DataFrame) -> None:
@@ -135,13 +197,18 @@ def _plot_monthly_trends(folder: Path, df: pd.DataFrame) -> None:
         .unstack()
         .fillna(0)
     )
-    monthly.plot(kind="bar", stacked=True, figsize=(12, 6))
-    plt.title("Monthly Cash-flow by Advanced Category")
-    plt.ylabel("RSD")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig(folder / "monthly_trends.png")
-    plt.close()
+    if monthly.empty:
+        return
+    fig, ax = plt.subplots(figsize=(11.5, 5.5))
+    monthly.plot(kind="bar", stacked=True, ax=ax, alpha=0.9)
+    ax.set_title("Cashflow by category", fontsize=14, pad=14)
+    ax.set_ylabel("RSD")
+    ax.set_xlabel("")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), frameon=False)
+    ax.set_xticklabels([str(idx) for idx in monthly.index], rotation=35, ha="right")
+    fig.tight_layout()
+    fig.savefig(folder / "monthly_trends.png", dpi=170, bbox_inches="tight")
+    plt.close(fig)
 
 
 def _plot_rolling(folder: Path, df: pd.DataFrame) -> None:
@@ -153,23 +220,39 @@ def _plot_rolling(folder: Path, df: pd.DataFrame) -> None:
         .abs()
     )
     window = 30 if len(daily) >= 30 else 7
-    daily.rolling(window).sum().plot(figsize=(12, 5))
-    plt.title(f"{window}-Day Rolling Spend")
-    plt.ylabel("RSD")
-    plt.tight_layout()
-    plt.savefig(folder / f"rolling{window}_spend.png")
-    plt.close()
+    rolling = daily.rolling(window).sum()
+    if rolling.empty:
+        return
+    fig, ax = plt.subplots(figsize=(11, 4.5))
+    ax.plot(rolling.index, rolling.values, color="#38bdf8", linewidth=2.5)
+    ax.fill_between(rolling.index, rolling.values, color="#38bdf8", alpha=0.18)
+    ax.set_title(f"{window}-day burn rate", fontsize=13, pad=12)
+    ax.set_ylabel("RSD")
+    ax.set_xlabel("")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(folder / f"rolling{window}_spend.png", dpi=170)
+    plt.close(fig)
 
 
 def _plot_monthly_net(folder: Path, df: pd.DataFrame) -> None:
     net_monthly = df.groupby("YEAR_MONTH")["Iznos"].sum()
-    net_monthly.plot(marker="o", figsize=(10, 4))
-    plt.axhline(0, color="gray", ls="--")
-    plt.title("Monthly Net Δ")
-    plt.ylabel("RSD")
-    plt.tight_layout()
-    plt.savefig(folder / "monthly_net.png")
-    plt.close()
+    if net_monthly.empty:
+        return
+    fig, ax = plt.subplots(figsize=(10, 4.3))
+    ax.plot(net_monthly.index, net_monthly.values, marker="o", color="#22d3ee", linewidth=2.4)
+    ax.axhline(0, color="#64748b", linestyle="--", linewidth=1)
+    ax.set_title("Monthly net change", fontsize=13, pad=12)
+    ax.set_ylabel("RSD")
+    ax.set_xlabel("")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(folder / "monthly_net.png", dpi=170)
+    plt.close(fig)
 
 
 def _plot_needs_wants(folder: Path, df: pd.DataFrame) -> None:
@@ -180,43 +263,60 @@ def _plot_needs_wants(folder: Path, df: pd.DataFrame) -> None:
         .abs()
     )
     summary_df = summary_df.reindex(["NEEDS", "WANTS"]).fillna(0)
-    plt.figure(figsize=(7, 5))
-    bars = plt.bar(summary_df.index, summary_df.values, color=["#2ecc71", "#e67e22"])
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    bars = ax.bar(summary_df.index, summary_df.values, color=["#22c55e", "#f97316"], width=0.55)
     for bar, value in zip(bars, summary_df.values):
-        plt.text(bar.get_x() + bar.get_width() / 2, value, fmt(value),
-                 ha="center", va="bottom", fontsize=10)
-    plt.title("NEEDS vs WANTS")
-    plt.ylabel("RSD")
-    plt.tight_layout()
-    plt.savefig(folder / "needs_wants.png")
-    plt.close()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            value * 1.04,
+            fmt(value),
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            color="#f8fafc",
+        )
+    ax.set_title("Needs vs wants", fontsize=13, pad=12)
+    ax.set_ylabel("RSD")
+    ax.spines["bottom"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(folder / "needs_wants.png", dpi=170)
+    plt.close(fig)
 
 
 def _plot_projected_net(folder: Path, net_projection: Iterable[float]) -> None:
     xs = list(range(len(net_projection)))
     ys = list(net_projection)
-    plt.figure(figsize=(10, 5))
-    plt.plot(xs, ys, marker="o", color="#1abc9c")
-    plt.title("Projected Net Worth")
-    plt.xlabel("Months")
-    plt.ylabel("RSD")
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(folder / "projected_net.png")
-    plt.close()
+    if not ys:
+        return
+    fig, ax = plt.subplots(figsize=(9.5, 4.5))
+    ax.plot(xs, ys, color="#22d3ee", linewidth=2.5)
+    ax.fill_between(xs, ys, color="#22d3ee", alpha=0.2)
+    ax.set_title("Projected net worth", fontsize=13, pad=12)
+    ax.set_xlabel("Months")
+    ax.set_ylabel("RSD")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(folder / "projected_net.png", dpi=170)
+    plt.close(fig)
 
 
 def _plot_projected_savings(folder: Path, savings_projection: Iterable[float]) -> None:
     xs = list(range(1, len(savings_projection) + 1))
-    plt.figure(figsize=(10, 5))
-    plt.plot(xs, savings_projection, marker="o", color="#e67e22")
-    plt.title("Projected Savings Only (12 mo)")
-    plt.xlabel("Months")
-    plt.ylabel("RSD")
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(folder / "projected_savings.png")
-    plt.close()
+    if not xs:
+        return
+    fig, ax = plt.subplots(figsize=(9.5, 4.5))
+    ax.plot(xs, savings_projection, color="#facc15", linewidth=2.5)
+    ax.fill_between(xs, savings_projection, color="#facc15", alpha=0.25)
+    ax.set_title("Projected savings", fontsize=13, pad=12)
+    ax.set_xlabel("Months")
+    ax.set_ylabel("RSD")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(folder / "projected_savings.png", dpi=170)
+    plt.close(fig)
 
 
 def generate_report(

@@ -1,7 +1,16 @@
 const STORAGE_KEY = "wallettaser-dashboard";
 
+const API_PORT = 8000;
+const API_BASE_URL = (() => {
+  const { protocol, hostname } = window.location;
+  if (!hostname || protocol === "file:") {
+    return `http://127.0.0.1:${API_PORT}`;
+  }
+  const safeProtocol = protocol.startsWith("http") ? protocol : "http:";
+  return `${safeProtocol}//${hostname}:${API_PORT}`;
+})();
+
 const elements = {
-  baseUrl: document.querySelector("#base-url"),
   username: document.querySelector("#username"),
   password: document.querySelector("#password"),
   authStatus: document.querySelector("#auth-status"),
@@ -104,16 +113,8 @@ function summarizeToken(tokenValue) {
   return `${tokenValue.slice(0, 6)}…${tokenValue.slice(-4)}`;
 }
 
-function currentConfig() {
-  return {
-    baseUrl: elements.baseUrl.value.trim().replace(/\/$/, ""),
-    username: elements.username.value.trim(),
-  };
-}
-
 async function authFetch(path, options = {}) {
-  const { baseUrl } = currentConfig();
-  const url = `${baseUrl}${path}`;
+  const url = `${API_BASE_URL}${path}`;
   const headers = new Headers(options.headers || {});
   if (token) headers.set("Authorization", `Bearer ${token}`);
   return fetch(url, { ...options, headers });
@@ -125,11 +126,10 @@ function ensureLoggedIn() {
 
 async function login(event) {
   event.preventDefault();
-  const baseUrl = elements.baseUrl.value.trim();
   const username = elements.username.value.trim();
   const password = elements.password.value;
 
-  if (!baseUrl || !username || !password) {
+  if (!username || !password) {
     setStatus(elements.authStatus, "Fill in all fields", { error: true });
     return;
   }
@@ -139,7 +139,7 @@ async function login(event) {
   setStatus(elements.authStatus, "Signing in…");
 
   try {
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/auth/token`, {
+    const response = await fetch(`${API_BASE_URL}/auth/token`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -158,7 +158,7 @@ async function login(event) {
     elements.tokenPreview.textContent = summarizeToken(token);
     elements.tenantLabel.textContent = `User: ${username}`;
     toggleApp(true);
-    saveConfig({ baseUrl: baseUrl.replace(/\/$/, ""), username, token });
+    saveConfig({ username, token });
     elements.password.value = "";
     await refreshJobList();
   } catch (error) {
@@ -166,7 +166,7 @@ async function login(event) {
     setStatus(elements.authStatus, error.message || "Failed to sign in", { error: true });
     token = null;
     toggleApp(false);
-    saveConfig({ baseUrl, username });
+    saveConfig({ username });
   } finally {
     submitButton.disabled = false;
   }
@@ -183,8 +183,7 @@ function logout() {
   setStatus(elements.assetsStatus, "");
   currentJobId = null;
   dismissedVendors.clear();
-  const cfg = currentConfig();
-  saveConfig({ ...cfg });
+  saveConfig({ username: elements.username.value.trim() });
 }
 
 function renderJobs(jobs) {
@@ -1138,6 +1137,7 @@ function openLightbox({ title, url, text }) {
   if (elements.lightboxImage) {
     if (url) {
       elements.lightboxImage.hidden = false;
+      elements.lightboxImage.removeAttribute("hidden");
       elements.lightboxImage.src = url;
     } else {
       elements.lightboxImage.hidden = true;
@@ -1147,6 +1147,7 @@ function openLightbox({ title, url, text }) {
   if (elements.lightboxText) {
     if (text) {
       elements.lightboxText.hidden = false;
+      elements.lightboxText.removeAttribute("hidden");
       elements.lightboxText.textContent = text;
     } else {
       elements.lightboxText.hidden = true;
@@ -1157,9 +1158,8 @@ function openLightbox({ title, url, text }) {
     elements.lightboxCaption.textContent = title;
   }
   elements.lightbox.hidden = false;
-  requestAnimationFrame(() => {
-    elements.lightbox.classList.add("visible");
-  });
+  elements.lightbox.removeAttribute("hidden");
+  elements.lightbox.classList.add("visible");
   document.body.style.overflow = "hidden";
   document.addEventListener("keydown", onLightboxKeydown);
 }
@@ -1262,7 +1262,6 @@ async function deleteCurrentJob() {
 
 function restoreFromConfig() {
   const config = loadConfig();
-  if (config.baseUrl) elements.baseUrl.value = config.baseUrl;
   if (config.username) elements.username.value = config.username;
   if (config.token) {
     token = config.token;
