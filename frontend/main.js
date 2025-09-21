@@ -23,6 +23,7 @@ const elements = {
   summaryStatus: document.querySelector("#summary-status"),
   assetsStatus: document.querySelector("#assets-status"),
   assetsGrid: document.querySelector("#assets-grid"),
+  deleteJob: document.querySelector("#delete-job"),
   jobRowTemplate: document.querySelector("#job-row-template"),
 };
 
@@ -34,6 +35,11 @@ const currencyFmt = new Intl.NumberFormat(undefined, {
 
 let token = null;
 const activeAssetUrls = [];
+let currentJobId = null;
+
+if (elements.deleteJob) {
+  elements.deleteJob.disabled = true;
+}
 
 function loadConfig() {
   try {
@@ -167,6 +173,7 @@ function logout() {
   elements.jobsTable.replaceChildren();
   clearAssetPreviews();
   setStatus(elements.assetsStatus, "");
+  currentJobId = null;
   const cfg = currentConfig();
   saveConfig({ ...cfg });
 }
@@ -260,12 +267,20 @@ async function loadSummary(jobId) {
     const summary = payload.summary;
     renderSummary(summary);
     setStatus(elements.summaryStatus, "Summary loaded.");
+    currentJobId = jobId;
+    if (elements.deleteJob) {
+      elements.deleteJob.disabled = false;
+    }
     await loadAssets(jobId);
   } catch (error) {
     console.error(error);
     setStatus(elements.summaryStatus, error.message || "Failed to load summary", { error: true });
     clearAssetPreviews();
     setStatus(elements.assetsStatus, "", { error: false });
+    currentJobId = null;
+    if (elements.deleteJob) {
+      elements.deleteJob.disabled = true;
+    }
   }
 }
 
@@ -484,6 +499,41 @@ async function downloadAsset(jobId, assetName) {
   }
 }
 
+async function deleteCurrentJob() {
+  if (!ensureLoggedIn()) {
+    setStatus(elements.summaryStatus, "Sign in first", { error: true });
+    return;
+  }
+  if (!currentJobId) {
+    setStatus(elements.summaryStatus, "No report selected", { error: true });
+    return;
+  }
+  const confirmed = window.confirm("Delete this report and all generated files? This cannot be undone.");
+  if (!confirmed) return;
+
+  setStatus(elements.summaryStatus, "Deleting report…");
+  try {
+    const response = await authFetch(`/statements/${currentJobId}`, { method: "DELETE" });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || response.statusText);
+    }
+    setStatus(elements.summaryStatus, "Report deleted.");
+    clearAssetPreviews();
+    setStatus(elements.assetsStatus, "");
+    elements.summaryCard.hidden = true;
+    elements.summaryJob.textContent = "";
+    currentJobId = null;
+    if (elements.deleteJob) {
+      elements.deleteJob.disabled = true;
+    }
+    await refreshJobList();
+  } catch (error) {
+    console.error(error);
+    setStatus(elements.summaryStatus, error.message || "Failed to delete report", { error: true });
+  }
+}
+
 function restoreFromConfig() {
   const config = loadConfig();
   if (config.baseUrl) elements.baseUrl.value = config.baseUrl;
@@ -501,5 +551,8 @@ elements.settingsForm.addEventListener("submit", login);
 elements.logout.addEventListener("click", logout);
 elements.uploadForm.addEventListener("submit", uploadStatement);
 elements.refreshJobs.addEventListener("click", refreshJobList);
+if (elements.deleteJob) {
+  elements.deleteJob.addEventListener("click", deleteCurrentJob);
+}
 
 restoreFromConfig();

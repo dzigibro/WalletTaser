@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import re
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,6 +77,21 @@ def _get_owned_job(session: Session, job_id: str, tenant_id: int) -> Job:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+def _safe_remove(paths: Iterable[Path]) -> None:
+    for path in paths:
+        try:
+            if not path:
+                continue
+            if not path.exists():
+                continue
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Failed to remove %s: %s", path, exc)
 
 
 @app.on_event("startup")
@@ -248,3 +264,24 @@ def get_job_asset(
 
     media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
     return FileResponse(file_path, media_type=media_type, filename=file_path.name)
+
+
+@app.delete("/statements/{job_id}")
+def delete_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    job = _get_owned_job(session, job_id, user.tenant_id)
+
+    tenant_root = get_data_root() / str(user.tenant_id)
+    report_dir = Path(job.report_directory) if job.report_directory else None
+    archive_path = Path(job.result_path) if job.result_path else None
+    uploads_dir = tenant_root / "uploads" / job_id
+
+    session.delete(job)
+    session.commit()
+
+    _safe_remove(path for path in (report_dir, archive_path, uploads_dir))
+
+    return {"job_id": job_id, "status": "deleted"}

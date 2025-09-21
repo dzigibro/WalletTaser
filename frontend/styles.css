@@ -73,6 +73,16 @@ button.primary:disabled {
   cursor: wait;
 }
 
+button.danger {
+  background: #ef4444;
+  border-color: transparent;
+  color: #fff;
+}
+
+button.danger:hover {
+  background: #dc2626;
+}
+
 button.ghost,
 a.ghost {
   background: transparent;
@@ -86,6 +96,12 @@ a.ghost {
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
+}
+
+.summary-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 
 .token {

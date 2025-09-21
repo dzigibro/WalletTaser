@@ -32,10 +32,15 @@ def client() -> TestClient:
 
 
 def test_assets_listing_and_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
-    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path / "data"))
+    data_root = tmp_path / "data"
+    monkeypatch.setenv(DATA_ROOT_ENV, str(data_root))
 
     statement_path = tmp_path / "statement.xlsx"
     _make_statement(statement_path)
+
+    report_dir_path: Path | None = None
+    archive_path: Path | None = None
+    uploads_dir: Path | None = None
 
     session = SessionLocal()
     try:
@@ -49,6 +54,10 @@ def test_assets_listing_and_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
             statement_path=statement_path,
             fx_rate=118.0,
         )
+
+        report_dir_path = Path(result["report_directory"])
+        archive_path = Path(result["archive_path"])
+        uploads_dir = data_root / str(tenant.id) / "uploads" / job_id
 
         job = Job(
             id=job_id,
@@ -87,3 +96,13 @@ def test_assets_listing_and_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         headers=headers,
     )
     assert bad_resp.status_code == 400
+
+    delete_resp = client.delete(f"/statements/{job_id}", headers=headers)
+    assert delete_resp.status_code == 200
+
+    after_delete = client.get(f"/statements/{job_id}", headers=headers)
+    assert after_delete.status_code == 404
+
+    assert report_dir_path and not report_dir_path.exists()
+    assert archive_path and not archive_path.exists()
+    assert uploads_dir and not uploads_dir.exists()
