@@ -137,6 +137,11 @@ docker compose up --build -d
 - Persistent artefacts land under the `data/` named volume (`wallettaser.db`,
   generated reports, archives, and vendor tags).
 
+When hosting on a remote server, update the dashboard's "API Base URL" field to
+use the public hostname (e.g. `http://your.server.ip:8000`). Cross-origin
+requests are enabled server-side so the dashboard can talk to the API from a
+different port.
+
 Uploads are restricted to Excel/CSV files (`.xls`, `.xlsx`, `.csv`). Filenames are
 sanitized and rewritten per job to keep the storage area clean and mitigate
 obvious upload shenanigans.

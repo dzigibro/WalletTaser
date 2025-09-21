@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,14 @@ from .tasks import process_statement_task
 
 app = FastAPI(title="WalletTaser API")
 app.include_router(auth_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 ensure_default_user()
 
