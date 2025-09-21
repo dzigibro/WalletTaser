@@ -103,6 +103,15 @@
       </tr>
     </template>
 
+    <div id="lightbox" class="lightbox" hidden>
+      <div class="lightbox-inner">
+        <button id="lightbox-close" class="ghost lightbox-close" type="button">✕</button>
+        <img id="lightbox-image" alt="Report preview" hidden />
+        <pre id="lightbox-text" class="lightbox-text" hidden></pre>
+        <div id="lightbox-caption" class="lightbox-caption"></div>
+      </div>
+    </div>
+
     <script type="module" src="main.js"></script>
   </body>
 </html>

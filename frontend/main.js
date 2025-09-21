@@ -24,6 +24,11 @@ const elements = {
   assetsStatus: document.querySelector("#assets-status"),
   assetsGrid: document.querySelector("#assets-grid"),
   deleteJob: document.querySelector("#delete-job"),
+  lightbox: document.querySelector("#lightbox"),
+  lightboxImage: document.querySelector("#lightbox-image"),
+  lightboxText: document.querySelector("#lightbox-text"),
+  lightboxCaption: document.querySelector("#lightbox-caption"),
+  lightboxClose: document.querySelector("#lightbox-close"),
   jobRowTemplate: document.querySelector("#job-row-template"),
 };
 
@@ -34,7 +39,7 @@ const currencyFmt = new Intl.NumberFormat(undefined, {
 });
 
 let token = null;
-const activeAssetUrls = [];
+const assetPreviewCache = new Map();
 let currentJobId = null;
 
 if (elements.deleteJob) {
@@ -63,13 +68,16 @@ function setStatus(target, message, { error = false } = {}) {
 }
 
 function clearAssetPreviews() {
-  while (activeAssetUrls.length) {
-    const url = activeAssetUrls.pop();
-    URL.revokeObjectURL(url);
-  }
+  assetPreviewCache.forEach((entry) => {
+    if (entry && entry.url) {
+      URL.revokeObjectURL(entry.url);
+    }
+  });
+  assetPreviewCache.clear();
   if (elements.assetsGrid) {
     elements.assetsGrid.replaceChildren();
   }
+  closeLightbox(true);
 }
 
 function formatBytes(size) {
@@ -407,7 +415,9 @@ async function loadAssets(jobId) {
 
 async function renderAssets(jobId, assets) {
   clearAssetPreviews();
-  elements.assetsGrid.replaceChildren();
+  if (elements.assetsGrid) {
+    elements.assetsGrid.replaceChildren();
+  }
   if (!assets.length) {
     setStatus(elements.assetsStatus, "No report assets available yet.");
     return;
@@ -423,40 +433,62 @@ async function renderAssets(jobId, assets) {
     const header = document.createElement("header");
     const title = document.createElement("strong");
     title.textContent = asset.name;
-    const meta = document.createElement("span");
+    const meta = document.createElement("div");
     meta.className = "asset-meta";
-    meta.textContent = [asset.content_type, formatBytes(asset.size)].filter(Boolean).join(" · ");
+
+    const typeLabel = formatAssetType(asset);
+    if (typeLabel) {
+      const badge = createBadge(typeLabel, "type");
+      if (badge) meta.appendChild(badge);
+    }
+
+    const sizeLabel = formatBytes(asset.size);
+    if (sizeLabel) {
+      const badge = createBadge(sizeLabel, "size");
+      if (badge) meta.appendChild(badge);
+    }
+
     header.append(title, meta);
     card.appendChild(header);
 
-    if (asset.content_type && asset.content_type.startsWith("image/")) {
+    const actions = document.createElement("div");
+    actions.className = "asset-actions";
+
+    if (isImageAsset(asset)) {
       const img = document.createElement("img");
       img.alt = asset.name;
       img.loading = "lazy";
       card.appendChild(img);
-      const previewPromise = fetchAssetBlob(jobId, asset.name)
-        .then((blob) => {
-          const url = URL.createObjectURL(blob);
+      const previewPromise = ensureAssetUrl(jobId, asset.name)
+        .then((url) => {
           img.src = url;
-          activeAssetUrls.push(url);
         })
         .catch((error) => {
           console.error("Failed to render asset", asset.name, error);
           img.replaceWith(document.createTextNode("Preview unavailable"));
         });
       previewPromises.push(previewPromise);
+      img.addEventListener("click", () => openImagePreview(jobId, asset.name));
+      actions.appendChild(createActionButton("Open", () => openImagePreview(jobId, asset.name)));
+    } else if (isPreviewableTextAsset(asset)) {
+      const preview = document.createElement("pre");
+      preview.className = "asset-preview";
+      preview.textContent = "Loading preview…";
+      card.appendChild(preview);
+      const previewPromise = ensureAssetText(jobId, asset.name)
+        .then((entry) => {
+          preview.textContent = entry.snippet;
+        })
+        .catch((error) => {
+          console.error("Failed to render asset", asset.name, error);
+          preview.textContent = `Preview unavailable: ${error.message}`;
+        });
+      previewPromises.push(previewPromise);
+      actions.appendChild(createActionButton("Expand", () => openTextPreview(jobId, asset.name)));
     }
 
-    const actions = document.createElement("div");
-    actions.className = "asset-actions";
-    const downloadBtn = document.createElement("button");
-    downloadBtn.className = "ghost";
-    downloadBtn.type = "button";
-    downloadBtn.textContent = "Download";
-    downloadBtn.addEventListener("click", () => downloadAsset(jobId, asset.name));
-    actions.appendChild(downloadBtn);
+    actions.appendChild(createActionButton("Download", () => downloadAsset(jobId, asset.name)));
     card.appendChild(actions);
-
     fragment.appendChild(card);
   });
 
@@ -467,6 +499,186 @@ async function renderAssets(jobId, assets) {
   setStatus(elements.assetsStatus, `${assets.length} asset(s) ready.`);
 }
 
+function getAssetKey(jobId, assetName) {
+  return `${jobId}:${assetName}`;
+}
+
+function isImageAsset(asset) {
+  return Boolean(asset?.content_type && asset.content_type.startsWith("image/"));
+}
+
+function isPreviewableTextAsset(asset) {
+  const contentType = asset?.content_type?.toLowerCase() ?? "";
+  const name = asset?.name?.toLowerCase() ?? "";
+  if (contentType.includes("json") || contentType.includes("csv")) return true;
+  return name.endsWith(".json") || name.endsWith(".csv");
+}
+
+function getFileExtension(name) {
+  if (!name) return "";
+  const parts = name.split(".");
+  return parts.length > 1 ? parts.pop().toLowerCase() : "";
+}
+
+function formatAssetType(asset) {
+  const ext = getFileExtension(asset?.name);
+  const type = asset?.content_type?.toLowerCase() ?? "";
+  if (type.includes("png")) return "PNG";
+  if (type.includes("jpeg")) return "JPG";
+  if (type.includes("json")) return "JSON";
+  if (type.includes("csv")) return "CSV";
+  if (ext) return ext.toUpperCase();
+  return type ? type.toUpperCase() : "";
+}
+
+function createBadge(label, kind) {
+  if (!label) return null;
+  const span = document.createElement("span");
+  span.className = "asset-badge";
+  if (kind) span.dataset.kind = kind;
+  span.textContent = label;
+  return span;
+}
+
+function createActionButton(label, handler, className = "ghost") {
+  const button = document.createElement("button");
+  button.className = className;
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+async function ensureAssetUrl(jobId, assetName) {
+  const key = getAssetKey(jobId, assetName);
+  const cached = assetPreviewCache.get(key);
+  if (cached?.url) return cached.url;
+  const blob = await fetchAssetBlob(jobId, assetName);
+  const url = URL.createObjectURL(blob);
+  const next = { ...(cached || {}), url };
+  assetPreviewCache.set(key, next);
+  return url;
+}
+
+function buildTextPreview(fullText) {
+  const lines = fullText.split(/\r?\n/);
+  const snippetLines = lines.slice(0, 12);
+  let snippet = snippetLines.join("\n");
+  if (!snippet.trim()) {
+    snippet = fullText.slice(0, 400);
+  }
+  if (!snippet.trim()) {
+    snippet = "(empty file)";
+  }
+  if (lines.length > snippetLines.length) {
+    snippet += `\n… (${lines.length - snippetLines.length} more lines)`;
+  }
+  const maxChars = 8000;
+  let truncated = fullText;
+  if (fullText.length > maxChars) {
+    truncated = `${fullText.slice(0, maxChars)}\n… [truncated]`;
+  }
+  return { snippet, fullText: truncated };
+}
+
+async function ensureAssetText(jobId, assetName) {
+  const key = getAssetKey(jobId, assetName);
+  const cached = assetPreviewCache.get(key);
+  if (cached?.text) return cached;
+  const blob = await fetchAssetBlob(jobId, assetName);
+  const fullText = await blob.text();
+  const processed = buildTextPreview(fullText);
+  const next = { ...(cached || {}), text: processed.fullText, snippet: processed.snippet };
+  assetPreviewCache.set(key, next);
+  return next;
+}
+
+async function openImagePreview(jobId, assetName) {
+  try {
+    const url = await ensureAssetUrl(jobId, assetName);
+    openLightbox({ title: assetName, url });
+  } catch (error) {
+    console.error(error);
+    setStatus(elements.summaryStatus, error.message || "Failed to open image", { error: true });
+  }
+}
+
+async function openTextPreview(jobId, assetName) {
+  try {
+    const entry = await ensureAssetText(jobId, assetName);
+    openLightbox({ title: assetName, text: entry.text });
+  } catch (error) {
+    console.error(error);
+    setStatus(elements.summaryStatus, error.message || "Failed to open preview", { error: true });
+  }
+}
+
+const LIGHTBOX_FADE_MS = 200;
+const onLightboxKeydown = (event) => {
+  if (event.key === "Escape") {
+    closeLightbox();
+  }
+};
+
+function openLightbox({ title, url, text }) {
+  if (!elements.lightbox) return;
+  if (elements.lightboxImage) {
+    if (url) {
+      elements.lightboxImage.hidden = false;
+      elements.lightboxImage.src = url;
+    } else {
+      elements.lightboxImage.hidden = true;
+      elements.lightboxImage.removeAttribute("src");
+    }
+  }
+  if (elements.lightboxText) {
+    if (text) {
+      elements.lightboxText.hidden = false;
+      elements.lightboxText.textContent = text;
+    } else {
+      elements.lightboxText.hidden = true;
+      elements.lightboxText.textContent = "";
+    }
+  }
+  if (elements.lightboxCaption) {
+    elements.lightboxCaption.textContent = title;
+  }
+  elements.lightbox.hidden = false;
+  requestAnimationFrame(() => {
+    elements.lightbox.classList.add("visible");
+  });
+  document.body.style.overflow = "hidden";
+  document.addEventListener("keydown", onLightboxKeydown);
+}
+
+function closeLightbox(immediate = false) {
+  if (!elements.lightbox || elements.lightbox.hidden) return;
+  elements.lightbox.classList.remove("visible");
+  document.body.style.overflow = "";
+  document.removeEventListener("keydown", onLightboxKeydown);
+
+  const finalize = () => {
+    if (!elements.lightbox) return;
+    elements.lightbox.hidden = true;
+    if (elements.lightboxImage) {
+      elements.lightboxImage.removeAttribute("src");
+      elements.lightboxImage.hidden = true;
+    }
+    if (elements.lightboxText) {
+      elements.lightboxText.textContent = "";
+      elements.lightboxText.hidden = true;
+    }
+    if (elements.lightboxCaption) {
+      elements.lightboxCaption.textContent = "";
+    }
+  };
+
+  if (immediate) {
+    finalize();
+  } else {
+    setTimeout(finalize, LIGHTBOX_FADE_MS);
+  }
+}
 async function fetchAssetBlob(jobId, assetName) {
   const response = await authFetch(`/statements/${jobId}/asset?name=${encodeURIComponent(assetName)}`);
   if (!response.ok) {
@@ -553,6 +765,16 @@ elements.uploadForm.addEventListener("submit", uploadStatement);
 elements.refreshJobs.addEventListener("click", refreshJobList);
 if (elements.deleteJob) {
   elements.deleteJob.addEventListener("click", deleteCurrentJob);
+}
+if (elements.lightbox) {
+  elements.lightbox.addEventListener("click", (event) => {
+    if (event.target === elements.lightbox) {
+      closeLightbox();
+    }
+  });
+}
+if (elements.lightboxClose) {
+  elements.lightboxClose.addEventListener("click", () => closeLightbox());
 }
 
 restoreFromConfig();

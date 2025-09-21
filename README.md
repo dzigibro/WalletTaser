@@ -12,6 +12,8 @@
   - 12-month net worth projection
 - CSV + SQLite export
 - Console summary with vampire detection (parasitic vendors)
+- Browser dashboard with inline chart previews, text snippets, and one-click
+  secure cleanup of generated artefacts
 
 ## 🐍 Requirements
 
