@@ -53,6 +53,23 @@ def test_generate_report_summary(tmp_path: Path, sample_statement: Path) -> None
     assert summary.average_spend == pytest.approx(-13_000)
     assert summary.average_savings == pytest.approx(10_000)
     assert summary.average_stock_investment == pytest.approx(5_000)
+    assert summary.monthly_savings == pytest.approx(summary.average_savings)
+    assert summary.monthly_spend == pytest.approx(abs(summary.average_spend))
+
+    expected_net_flow = (
+        summary.average_income
+        + summary.average_savings
+        + summary.average_stock_investment
+        - summary.monthly_spend
+    )
+    assert summary.net_flow == pytest.approx(expected_net_flow)
+
+    assert summary.total_spend >= summary.monthly_spend
+    if summary.monthly_spend > 0:
+        assert summary.savings_rate == pytest.approx(
+            summary.monthly_savings / summary.monthly_spend, rel=1e-3
+        )
+    assert summary.needs_spend + summary.wants_spend <= summary.total_spend + 1
 
     assert summary.projected_net[0] == 0
     assert summary.projected_net[-1] == pytest.approx(624_000)
@@ -60,6 +77,9 @@ def test_generate_report_summary(tmp_path: Path, sample_statement: Path) -> None
 
     vampires = set(summary.vampires)
     assert {"LIDL", "CAR GO", "BANKOMAT"}.issubset(vampires)
+    if summary.vampire_breakdown:
+        breakdown_vendors = {entry["vendor"] for entry in summary.vampire_breakdown}
+        assert {"LIDL", "CAR GO", "BANKOMAT"} & breakdown_vendors
     assert summary.fx_rate == pytest.approx(117.0)
 
     metadata_path = output_dir / "metadata.json"
@@ -68,6 +88,8 @@ def test_generate_report_summary(tmp_path: Path, sample_statement: Path) -> None
         payload = json.load(handle)
     assert payload["average_income"] == summary.average_income
     assert payload["projected_savings"][-1] == summary.projected_savings[-1]
+    assert payload["net_flow"] == summary.net_flow
+    assert payload["total_spend"] == summary.total_spend
 
 
 def test_process_statement_creates_artifacts(
@@ -103,6 +125,8 @@ def test_process_statement_creates_artifacts(
     assert summary.average_income == pytest.approx(50_000)
     assert summary.average_savings == pytest.approx(10_000)
     assert summary.fx_rate == pytest.approx(110.5)
+    assert summary.total_spend > 0
+    assert summary.vampire_breakdown
 
     # check tenant isolation paths
     assert data_root in report_dir.parents

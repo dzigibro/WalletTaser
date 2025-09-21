@@ -234,30 +234,6 @@ async function refreshJobList() {
   }
 }
 
-function createSummaryEntry(label, value) {
-  const div = document.createElement("div");
-  div.className = "summary-item";
-  const heading = document.createElement("h4");
-  heading.textContent = label;
-  const body = document.createElement("div");
-  body.className = "value";
-  body.textContent = value;
-  div.append(heading, body);
-  return div;
-}
-
-function describeArray(label, values) {
-  const container = document.createElement("div");
-  container.className = "summary-item";
-  const heading = document.createElement("h4");
-  heading.textContent = label;
-  const list = document.createElement("div");
-  list.className = "value";
-  list.textContent = values.join(", ");
-  container.append(heading, list);
-  return container;
-}
-
 async function loadSummary(jobId) {
   if (!ensureLoggedIn()) return;
   elements.summaryCard.hidden = false;
@@ -279,6 +255,7 @@ async function loadSummary(jobId) {
     if (elements.deleteJob) {
       elements.deleteJob.disabled = false;
     }
+    setStatus(elements.assetsStatus, "Loading receipts…");
     await loadAssets(jobId);
   } catch (error) {
     console.error(error);
@@ -292,36 +269,337 @@ async function loadSummary(jobId) {
   }
 }
 
+function formatCurrency(value) {
+  if (!Number.isFinite(value)) return "—";
+  return currencyFmt.format(Math.round(value));
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function computeMonthlySpend(summary) {
+  const spend = summary?.monthly_spend ?? Math.abs(summary?.average_spend ?? 0);
+  return Number.isFinite(spend) ? spend : 0;
+}
+
+function computeMonthlySavings(summary) {
+  const savings = summary?.monthly_savings ?? summary?.average_savings ?? 0;
+  return Number.isFinite(savings) ? savings : 0;
+}
+
+function computeNetFlow(summary) {
+  if (typeof summary?.net_flow === "number") {
+    return summary.net_flow;
+  }
+  const income = summary?.average_income ?? 0;
+  const stocks = summary?.average_stock_investment ?? 0;
+  const savings = computeMonthlySavings(summary);
+  const spend = computeMonthlySpend(summary);
+  return income + savings + stocks - spend;
+}
+
+function computeSavingsRate(summary) {
+  if (typeof summary?.savings_rate === "number") {
+    return summary.savings_rate;
+  }
+  const spend = computeMonthlySpend(summary);
+  if (spend <= 0) return 1;
+  return computeMonthlySavings(summary) / spend;
+}
+
+function computeSavingsPercentile(rate) {
+  if (!Number.isFinite(rate)) return 95;
+  if (rate <= 0) return 12;
+  return clamp(Math.round(rate * 120), 15, 97);
+}
+
+function formatPercentage(value) {
+  if (!Number.isFinite(value)) return "—";
+  return `${Math.round(value)}%`;
+}
+
+function buildHeroSection(summary) {
+  const hero = document.createElement("section");
+  hero.className = "hero-grid";
+
+  const monthlySpend = computeMonthlySpend(summary);
+  const monthlySavings = computeMonthlySavings(summary);
+  const netFlow = computeNetFlow(summary);
+  const broke = netFlow < 0;
+  const statusCard = createHeroCard({
+    label: "Am I broke?",
+    headline: broke
+      ? `-${formatCurrency(Math.abs(netFlow))}/mo`
+      : `+${formatCurrency(netFlow)}/mo`,
+    subline: broke
+      ? `You're burning ${formatCurrency(monthlySpend)} each month. Plug the leaks below.`
+      : `You're stacking ${formatCurrency(monthlySpend)} of spending with cash to spare.`,
+    variant: broke ? "negative" : "positive",
+  });
+
+  const savingsRate = computeSavingsRate(summary);
+  const percentile = computeSavingsPercentile(savingsRate);
+  const savingsCard = createHeroCard({
+    label: "Monthly win",
+    headline: monthlySavings > 0
+      ? `${formatCurrency(monthlySavings)} saved`
+      : "No savings yet",
+    subline: monthlySavings > 0
+      ? `You beat ${percentile}% of WalletTaser users this month.`
+      : "Let's stash at least coffee money next month.",
+    variant: monthlySavings > 0 ? "positive" : "neutral",
+  });
+
+  const projectedSavings = Array.isArray(summary?.projected_savings)
+    ? summary.projected_savings.at(-1)
+    : null;
+  const fallbackProjection = monthlySavings * 12;
+  const projectionValue = projectedSavings ?? fallbackProjection;
+  const monthsAhead = Array.isArray(summary?.projected_savings)
+    ? summary.projected_savings.length
+    : 12;
+  const projectionCard = createHeroCard({
+    label: "Future you",
+    headline: projectionValue
+      ? `${formatCurrency(projectionValue)} potential`
+      : "Momentum pending",
+    subline: projectionValue
+      ? `Keep this pace and you'll hit that in ${monthsAhead} months.`
+      : "Add a statement to see your trajectory.",
+    variant: projectionValue ? "neutral" : "muted",
+  });
+
+  hero.append(statusCard, savingsCard, projectionCard);
+  return hero;
+}
+
+function createHeroCard({ label, headline, subline, variant = "neutral" }) {
+  const card = document.createElement("div");
+  card.className = `hero-card ${variant}`.trim();
+
+  const headlineEl = document.createElement("div");
+  headlineEl.className = "hero-value";
+  headlineEl.textContent = headline;
+
+  const labelEl = document.createElement("span");
+  labelEl.className = "hero-label";
+  labelEl.textContent = label;
+
+  const subtitleEl = document.createElement("p");
+  subtitleEl.className = "hero-subtitle";
+  subtitleEl.textContent = subline;
+
+  card.append(labelEl, headlineEl, subtitleEl);
+  return card;
+}
+
+function buildStatsGrid(summary) {
+  const stats = [];
+  const monthlySpend = computeMonthlySpend(summary);
+  stats.push({
+    label: "Monthly burn",
+    value: formatCurrency(monthlySpend),
+    caption: "Across cards & cash",
+    variant: "negative",
+  });
+
+  const savingsRate = computeSavingsRate(summary);
+  const savingsPercent = clamp(Math.round(savingsRate * 100), -200, 200);
+  stats.push({
+    label: "Savings rate",
+    value: formatPercentage(clamp(savingsPercent, -200, 200)),
+    caption: "How much you keep vs. spend",
+    variant: savingsPercent >= 50 ? "positive" : savingsPercent <= 0 ? "negative" : "neutral",
+  });
+
+  stats.push({
+    label: "Last 7 days",
+    value: formatCurrency(summary?.last_week_spend ?? 0),
+    caption: "Fresh outflow",
+    variant: "neutral",
+  });
+
+  const delta = summary?.delta_week_spend ?? 0;
+  stats.push({
+    label: "Week over week",
+    value: `${delta >= 0 ? "+" : "-"}${formatCurrency(Math.abs(delta))}`,
+    caption: delta >= 0 ? "You spent more than last week" : "You're slowing the leak",
+    variant: delta > 0 ? "negative" : delta < 0 ? "positive" : "neutral",
+  });
+
+  const totalSpend = summary?.total_spend;
+  if (Number.isFinite(totalSpend) && totalSpend > 0) {
+    stats.push({
+      label: "Total this month",
+      value: formatCurrency(totalSpend),
+      caption: "All debit outflows",
+      variant: "neutral",
+    });
+  }
+
+  if (!stats.length) return null;
+
+  const grid = document.createElement("section");
+  grid.className = "stat-grid";
+
+  stats.forEach((item) => {
+    grid.appendChild(createStatCard(item));
+  });
+
+  return grid;
+}
+
+function createStatCard({ label, value, caption, variant = "neutral" }) {
+  const card = document.createElement("div");
+  card.className = `stat-card ${variant}`.trim();
+
+  const labelEl = document.createElement("span");
+  labelEl.className = "stat-label";
+  labelEl.textContent = label;
+
+  const valueEl = document.createElement("div");
+  valueEl.className = "stat-value";
+  valueEl.textContent = value;
+
+  const captionEl = document.createElement("p");
+  captionEl.className = "stat-caption";
+  captionEl.textContent = caption;
+
+  card.append(labelEl, valueEl, captionEl);
+  return card;
+}
+
+function buildNeedsWantsCard(summary) {
+  const needs = Number(summary?.needs_spend ?? 0);
+  const wants = Number(summary?.wants_spend ?? 0);
+  const total = needs + wants;
+  if (total <= 0) return null;
+
+  const needsPercent = clamp(Math.round((needs / total) * 100), 0, 100);
+  const wantsPercent = clamp(100 - needsPercent, 0, 100);
+
+  const card = document.createElement("section");
+  card.className = "needs-card";
+
+  const header = document.createElement("header");
+  header.innerHTML = "<h4>Needs vs wants</h4><span>Does your budget match your priorities?</span>";
+  card.appendChild(header);
+
+  const track = document.createElement("div");
+  track.className = "split-bar";
+
+  const needsFill = document.createElement("div");
+  needsFill.className = "split-fill needs";
+  needsFill.style.width = `${needsPercent}%`;
+  track.appendChild(needsFill);
+
+  const wantsFill = document.createElement("div");
+  wantsFill.className = "split-fill wants";
+  wantsFill.style.width = `${wantsPercent}%`;
+  track.appendChild(wantsFill);
+
+  card.appendChild(track);
+
+  const legend = document.createElement("div");
+  legend.className = "needs-legend";
+
+  const needsItem = document.createElement("div");
+  needsItem.className = "legend-item";
+  needsItem.innerHTML = `<span class="dot needs"></span><strong>${needsPercent}%</strong><span>needs</span>`;
+
+  const wantsItem = document.createElement("div");
+  wantsItem.className = "legend-item";
+  wantsItem.innerHTML = `<span class="dot wants"></span><strong>${wantsPercent}%</strong><span>wants</span>`;
+
+  legend.append(needsItem, wantsItem);
+  card.appendChild(legend);
+
+  return card;
+}
+
+function buildClarityCard(summary) {
+  const breakdown = Array.isArray(summary?.vampire_breakdown) && summary.vampire_breakdown.length
+    ? summary.vampire_breakdown
+    : Array.isArray(summary?.vampires)
+      ? summary.vampires.map((vendor) => ({ vendor, share: 0, amount: null }))
+      : [];
+
+  if (!breakdown.length) return null;
+
+  const card = document.createElement("section");
+  card.className = "clarity-card";
+
+  const header = document.createElement("header");
+  header.className = "clarity-header";
+  header.innerHTML = "<h4>Where your money really went 😈</h4><span>Top leaks to plug next month</span>";
+  card.appendChild(header);
+
+  const list = document.createElement("ul");
+  list.className = "spend-list";
+
+  breakdown.slice(0, 6).forEach((entry, index) => {
+    const item = document.createElement("li");
+    item.className = "spend-item";
+
+    const rank = document.createElement("span");
+    rank.className = "spend-rank";
+    rank.textContent = ["😈", "🔥", "🍔", "☕", "🚕", "🎮"][index] || "•";
+
+    const info = document.createElement("div");
+    info.className = "spend-info";
+
+    const name = document.createElement("strong");
+    name.textContent = entry.vendor;
+
+    const sharePercent = Number.isFinite(entry.share) ? Math.round(entry.share * 100) : null;
+    const shareText = document.createElement("span");
+    shareText.className = "spend-share";
+    shareText.textContent = sharePercent ? `${sharePercent}% of your spend` : "Sneaky recurring spend";
+
+    const amount = document.createElement("span");
+    amount.className = "spend-amount";
+    if (Number.isFinite(entry.amount)) {
+      amount.textContent = formatCurrency(entry.amount);
+    }
+
+    info.append(name, shareText, amount);
+
+    const bar = document.createElement("div");
+    bar.className = "spend-bar";
+    const barFill = document.createElement("div");
+    barFill.className = "spend-bar-fill";
+    const width = sharePercent !== null ? clamp(sharePercent, 6, 100) : 20;
+    barFill.style.width = `${width}%`;
+    bar.appendChild(barFill);
+
+    item.append(rank, info, bar);
+    list.appendChild(item);
+  });
+
+  card.appendChild(list);
+  return card;
+}
+
 function renderSummary(summary) {
-  const items = [];
-  items.push(createSummaryEntry("Months Observed", summary.months_observed ?? "—"));
-  items.push(createSummaryEntry("Avg Income", currencyFmt.format(summary.average_income ?? 0)));
-  items.push(createSummaryEntry("Avg Spend", currencyFmt.format(Math.abs(summary.average_spend ?? 0))));
-  items.push(createSummaryEntry("Avg Savings", currencyFmt.format(summary.average_savings ?? 0)));
-  items.push(createSummaryEntry("Avg Stocks", currencyFmt.format(summary.average_stock_investment ?? 0)));
-  items.push(createSummaryEntry("Last Week Spend", currencyFmt.format(summary.last_week_spend ?? 0)));
-  items.push(createSummaryEntry("Prior Week Spend", currencyFmt.format(summary.previous_week_spend ?? 0)));
-  items.push(createSummaryEntry("Delta Week", currencyFmt.format(summary.delta_week_spend ?? 0)));
+  elements.summaryContent.replaceChildren();
+  const hero = buildHeroSection(summary);
+  elements.summaryContent.appendChild(hero);
 
-  if (Array.isArray(summary.projected_net)) {
-    const last = summary.projected_net.at(-1);
-    items.push(createSummaryEntry("Projected Net (12 mo)", currencyFmt.format(last ?? 0)));
+  const statsGrid = buildStatsGrid(summary);
+  if (statsGrid) {
+    elements.summaryContent.appendChild(statsGrid);
   }
 
-  if (Array.isArray(summary.projected_savings)) {
-    const lastSave = summary.projected_savings.at(-1);
-    items.push(createSummaryEntry("Savings (12 mo)", currencyFmt.format(lastSave ?? 0)));
+  const needsCard = buildNeedsWantsCard(summary);
+  if (needsCard) {
+    elements.summaryContent.appendChild(needsCard);
   }
 
-  if (Array.isArray(summary.vampires) && summary.vampires.length > 0) {
-    items.push(describeArray("Vampire Vendors", summary.vampires));
+  const clarityCard = buildClarityCard(summary);
+  if (clarityCard) {
+    elements.summaryContent.appendChild(clarityCard);
   }
-
-  if (summary.fx_rate) {
-    items.push(createSummaryEntry("FX Rate", summary.fx_rate.toFixed(2)));
-  }
-
-  elements.summaryContent.replaceChildren(...items);
 }
 
 async function uploadStatement(event) {
@@ -396,7 +674,7 @@ async function downloadArchive(jobId, filename) {
 }
 
 async function loadAssets(jobId) {
-  setStatus(elements.assetsStatus, "Loading assets…");
+  setStatus(elements.assetsStatus, "Loading receipts…");
   elements.assetsGrid.replaceChildren();
   try {
     const response = await authFetch(`/statements/${jobId}/assets`);
@@ -469,7 +747,7 @@ async function renderAssets(jobId, assets) {
         });
       previewPromises.push(previewPromise);
       img.addEventListener("click", () => openImagePreview(jobId, asset.name));
-      actions.appendChild(createActionButton("Open", () => openImagePreview(jobId, asset.name)));
+      actions.appendChild(createActionButton("Open", () => openImagePreview(jobId, asset.name), "primary"));
     } else if (isPreviewableTextAsset(asset)) {
       const preview = document.createElement("pre");
       preview.className = "asset-preview";
@@ -484,10 +762,10 @@ async function renderAssets(jobId, assets) {
           preview.textContent = `Preview unavailable: ${error.message}`;
         });
       previewPromises.push(previewPromise);
-      actions.appendChild(createActionButton("Expand", () => openTextPreview(jobId, asset.name)));
+      actions.appendChild(createActionButton("Expand", () => openTextPreview(jobId, asset.name), "primary"));
     }
 
-    actions.appendChild(createActionButton("Download", () => downloadAsset(jobId, asset.name)));
+    actions.appendChild(createActionButton("Download", () => downloadAsset(jobId, asset.name), "ghost"));
     card.appendChild(actions);
     fragment.appendChild(card);
   });
@@ -496,7 +774,8 @@ async function renderAssets(jobId, assets) {
   if (previewPromises.length) {
     await Promise.allSettled(previewPromises);
   }
-  setStatus(elements.assetsStatus, `${assets.length} asset(s) ready.`);
+  const plural = assets.length === 1 ? "receipt" : "receipts";
+  setStatus(elements.assetsStatus, `${assets.length} ${plural} ready. Tap to zoom or download.`);
 }
 
 function getAssetKey(jobId, assetName) {
@@ -540,11 +819,12 @@ function createBadge(label, kind) {
   return span;
 }
 
-function createActionButton(label, handler, className = "ghost") {
+function createActionButton(label, handler, ...classes) {
   const button = document.createElement("button");
-  button.className = className;
   button.type = "button";
   button.textContent = label;
+  const applied = classes.length ? classes : ["ghost"];
+  button.classList.add(...applied);
   button.addEventListener("click", handler);
   return button;
 }

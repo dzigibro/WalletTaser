@@ -5,7 +5,7 @@ import csv
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from itertools import cycle
 from pathlib import Path
@@ -31,6 +31,14 @@ class ReportSummary:
     delta_week_spend: float
     vampires: list[str]
     fx_rate: float
+    net_flow: float
+    monthly_spend: float
+    monthly_savings: float
+    total_spend: float
+    savings_rate: float
+    needs_spend: float
+    wants_spend: float
+    vampire_breakdown: list[dict[str, float]] = field(default_factory=list)
 
 
 def _load_tags(tag_file: Path) -> dict[str, str]:
@@ -265,21 +273,47 @@ def generate_report(
         ]["Iznos"].sum()
     )
     delta_week = last_week - previous_week
-    total_spend = df[df.Iznos < 0]["Iznos"].abs().sum() or 1
-    vampires = (
+    spend_by_vendor = (
         df[df.Iznos < 0]
         .groupby("VENDOR")["Iznos"]
         .sum()
         .abs()
-        .divide(total_spend)
-        .loc[lambda series: series > 0.05]
-        .index
-        .tolist()
+        .sort_values(ascending=False)
+    )
+    total_spend = float(spend_by_vendor.sum())
+    vampire_breakdown: list[dict[str, float]] = []
+    if total_spend > 0:
+        for vendor, amount in spend_by_vendor.items():
+            share = amount / total_spend if total_spend else 0.0
+            if share < 0.04 and len(vampire_breakdown) >= 5:
+                break
+            vampire_breakdown.append(
+                {
+                    "vendor": vendor,
+                    "share": round(share, 4),
+                    "amount": round(float(amount), 2),
+                }
+            )
+            if len(vampire_breakdown) >= 6:
+                break
+
+    vampires = [entry["vendor"] for entry in vampire_breakdown] or spend_by_vendor.head(3).index.tolist()
+
+    monthly_spend = abs(avg_spend)
+    monthly_savings = avg_savings
+    net_flow = avg_income + monthly_savings + avg_stocks - monthly_spend
+    savings_rate = monthly_savings / monthly_spend if monthly_spend > 0 else 1.0
+
+    needs_spend = abs(
+        df[(df.Iznos < 0) & (df.NEEDS_WANTS == "NEEDS")]["Iznos"].sum()
+    )
+    wants_spend = abs(
+        df[(df.Iznos < 0) & (df.NEEDS_WANTS == "WANTS")]["Iznos"].sum()
     )
 
     summary_payload = ReportSummary(
         months_observed=months,
-        average_savings=avg_savings,
+        average_savings=monthly_savings,
         average_income=avg_income,
         average_spend=avg_spend,
         average_stock_investment=avg_stocks,
@@ -290,6 +324,14 @@ def generate_report(
         delta_week_spend=delta_week,
         vampires=vampires,
         fx_rate=fx_rate,
+        net_flow=round(net_flow, 2),
+        monthly_spend=round(monthly_spend, 2),
+        monthly_savings=round(monthly_savings, 2),
+        total_spend=round(total_spend, 2),
+        savings_rate=round(savings_rate, 4),
+        needs_spend=round(needs_spend, 2),
+        wants_spend=round(wants_spend, 2),
+        vampire_breakdown=vampire_breakdown,
     )
 
     metadata_path = output_folder / "metadata.json"
