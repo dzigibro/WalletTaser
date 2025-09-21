@@ -13,6 +13,7 @@ from typing import Iterable
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 from cycler import cycler
 
 from finance import DEF_FX, fmt, load_clean, summary
@@ -134,7 +135,7 @@ def _plot_vendors(folder: Path, df: pd.DataFrame) -> None:
         return
     colors = [next(TOP_COLORS) for _ in range(len(top))]
     fig, ax = plt.subplots(figsize=(10, 5.5))
-    bars = ax.bar(top.index, top.values, color=colors, linewidth=0)
+    bars = ax.bar(range(len(top)), top.values, color=colors, linewidth=0)
     for bar, value in zip(bars, top.values):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
@@ -147,7 +148,8 @@ def _plot_vendors(folder: Path, df: pd.DataFrame) -> None:
         )
     ax.set_title("Where your cash actually went", fontsize=14, pad=16)
     ax.set_ylabel("RSD")
-    ax.set_xticklabels(top.index, rotation=35, ha="right")
+    ax.set_xticks(range(len(top)))
+    ax.set_xticklabels([str(idx) for idx in top.index], rotation=35, ha="right")
     ax.spines["bottom"].set_visible(False)
     ax.spines["left"].set_visible(False)
     fig.tight_layout()
@@ -241,12 +243,16 @@ def _plot_monthly_net(folder: Path, df: pd.DataFrame) -> None:
     net_monthly = df.groupby("YEAR_MONTH")["Iznos"].sum()
     if net_monthly.empty:
         return
+    labels = [str(idx) for idx in net_monthly.index]
+    x_positions = np.arange(len(labels))
     fig, ax = plt.subplots(figsize=(10, 4.3))
-    ax.plot(net_monthly.index, net_monthly.values, marker="o", color="#22d3ee", linewidth=2.4)
+    ax.plot(x_positions, net_monthly.values, marker="o", color="#22d3ee", linewidth=2.4)
     ax.axhline(0, color="#64748b", linestyle="--", linewidth=1)
     ax.set_title("Monthly net change", fontsize=13, pad=12)
     ax.set_ylabel("RSD")
     ax.set_xlabel("")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(labels, rotation=35, ha="right")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     fig.autofmt_xdate()
