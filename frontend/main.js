@@ -799,7 +799,10 @@ async function renderAssets(jobId, assets) {
           img.replaceWith(document.createTextNode("Preview unavailable"));
         });
       previewPromises.push(previewPromise);
-      img.addEventListener("click", () => openImagePreview(jobId, asset.name));
+      img.addEventListener("click", (event) => {
+        event.preventDefault();
+        openImagePreview(jobId, asset.name);
+      });
       actions.appendChild(createActionButton("Open", () => openImagePreview(jobId, asset.name), "primary"));
     } else if (isPreviewableTextAsset(asset)) {
       const preview = document.createElement("pre");
@@ -1082,7 +1085,17 @@ function createActionButton(label, handler, ...classes) {
   button.textContent = label;
   const applied = classes.length ? classes : ["ghost"];
   button.classList.add(...applied);
-  button.addEventListener("click", handler);
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    try {
+      const result = handler(event);
+      if (result && typeof result.then === "function") {
+        result.catch((error) => console.error(`Action '${label}' failed`, error));
+      }
+    } catch (error) {
+      console.error(`Action '${label}' crashed`, error);
+    }
+  });
   return button;
 }
 
@@ -1253,7 +1266,9 @@ async function downloadAsset(jobId, assetName) {
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = assetName.split("/").pop() || assetName;
+    document.body.appendChild(anchor);
     anchor.click();
+    document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
     setStatus(elements.assetsStatus, `Downloaded ${assetName}.`);
   } catch (error) {
