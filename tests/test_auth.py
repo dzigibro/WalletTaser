@@ -16,47 +16,65 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_register_creates_user_and_returns_token(client: TestClient) -> None:
-    username = f"user_{uuid.uuid4().hex[:6]}"
-    tenant = f"tenant_{uuid.uuid4().hex[:6]}"
+def test_register_requires_verification(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WALLETTASER_DEV_VERIFICATION_HINT", "1")
+    email = f"user_{uuid.uuid4().hex[:6]}@example.com"
 
     response = client.post(
         "/auth/register",
-        json={"username": username, "password": "Sup3rStrong!", "tenant_name": tenant},
+        json={"email": email, "password": "Sup3rStrong!"},
     )
     assert response.status_code == 201
     payload = response.json()
-    assert "access_token" in payload
+    assert payload["status"] == "pending_verification"
+    code = payload.get("verification_hint")
+    assert code
 
-    # ensure the user exists and can sign in again
+    # login should be blocked until verification succeeds
     login_resp = client.post(
         "/auth/token",
-        json={"username": username, "password": "Sup3rStrong!"},
+        json={"email": email, "password": "Sup3rStrong!"},
     )
-    assert login_resp.status_code == 200
+    assert login_resp.status_code == 403
+
+    verify_resp = client.post(
+        "/auth/verify",
+        json={"email": email, "code": code},
+    )
+    assert verify_resp.status_code == 200
+    token_payload = verify_resp.json()
+    assert "access_token" in token_payload
+
+    # login now works
+    login_ok = client.post(
+        "/auth/token",
+        json={"email": email, "password": "Sup3rStrong!"},
+    )
+    assert login_ok.status_code == 200
 
     session = SessionLocal()
     try:
-        db_user = session.query(User).filter(User.username == username).first()
+        db_user = session.query(User).filter(User.username == email).first()
         assert db_user is not None
+        assert db_user.is_verified
         db_tenant = session.query(Tenant).filter(Tenant.id == db_user.tenant_id).first()
         assert db_tenant is not None
     finally:
         session.close()
 
 
-def test_register_rejects_duplicate_username(client: TestClient) -> None:
-    username = f"dup_{uuid.uuid4().hex[:6]}"
+def test_register_rejects_duplicate_email(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WALLETTASER_DEV_VERIFICATION_HINT", "1")
+    email = f"dup_{uuid.uuid4().hex[:6]}@example.com"
 
     first = client.post(
         "/auth/register",
-        json={"username": username, "password": "Password!1"},
+        json={"email": email, "password": "Password!1"},
     )
     assert first.status_code == 201
 
     duplicate = client.post(
         "/auth/register",
-        json={"username": username, "password": "Different1!"},
+        json={"email": email, "password": "Different1!"},
     )
     assert duplicate.status_code == 409
-

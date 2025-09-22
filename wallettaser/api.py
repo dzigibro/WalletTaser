@@ -61,8 +61,20 @@ def _sanitize_upload_filename(filename: str) -> str:
     return f"{safe_stem}{suffix}"
 
 
-def _serialize_job(job: Job) -> Dict[str, Any]:
+def _serialize_job(job: Job, *, mask_summary: bool = False) -> Dict[str, Any]:
     """Convert a job ORM instance to a JSON-serialisable dict."""
+    summary_payload: Any | None = None
+    if job.summary:
+        summary_payload = json.loads(job.summary)
+    summary_value: Any = None
+    if mask_summary:
+        summary_value = {
+            "masked": True,
+            "message": "Verify your email to unlock full reports.",
+        }
+    elif summary_payload is not None:
+        summary_value = summary_payload
+
     return {
         "job_id": job.id,
         "tenant_id": job.tenant_id,
@@ -76,7 +88,7 @@ def _serialize_job(job: Job) -> Dict[str, Any]:
         "result_path": job.result_path,
         "report_directory": job.report_directory,
         "error": job.error,
-        "summary": json.loads(job.summary) if job.summary else None,
+        "summary": summary_value,
     }
 
 
@@ -171,7 +183,8 @@ def list_jobs(
         .limit(limit)
         .all()
     )
-    return [_serialize_job(job) for job in jobs]
+    mask = not user.is_verified
+    return [_serialize_job(job, mask_summary=mask) for job in jobs]
 
 
 @app.get("/statements/{job_id}")
@@ -181,7 +194,7 @@ def get_job_status(
     session: Session = Depends(get_session),
 ):
     job = _get_owned_job(session, job_id, user.tenant_id)
-    return _serialize_job(job)
+    return _serialize_job(job, mask_summary=not user.is_verified)
 
 
 @app.get("/statements/{job_id}/summary")
@@ -193,6 +206,14 @@ def get_job_summary(
     job = _get_owned_job(session, job_id, user.tenant_id)
     if not job.summary:
         raise HTTPException(status_code=404, detail="Summary not available")
+    if not user.is_verified:
+        return {
+            "job_id": job.id,
+            "summary": {
+                "masked": True,
+                "message": "Verify your email to unlock full analytics.",
+            },
+        }
     return {
         "job_id": job.id,
         "summary": json.loads(job.summary),
@@ -205,6 +226,8 @@ def download_result(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="verification_required")
     job = _get_owned_job(session, job_id, user.tenant_id)
     if job.status != "completed" or not job.result_path:
         raise HTTPException(status_code=400, detail="Job not completed")
@@ -228,6 +251,13 @@ def list_job_assets(
     report_dir = Path(job.report_directory)
     if not report_dir.exists():
         raise HTTPException(status_code=404, detail="Report directory missing")
+
+    if not user.is_verified:
+        return {
+            "assets": [],
+            "masked": True,
+            "message": "Verify your email to unlock report assets.",
+        }
 
     assets: List[Dict[str, Any]] = []
     for path in report_dir.rglob("*"):
@@ -256,6 +286,8 @@ def get_job_asset(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="verification_required")
     job = _get_owned_job(session, job_id, user.tenant_id)
     if job.status != "completed" or not job.report_directory:
         raise HTTPException(status_code=400, detail="Job not completed")
@@ -293,6 +325,8 @@ def reanalyze_statement(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="verification_required")
     job = _get_owned_job(session, job_id, user.tenant_id)
     source = locate_statement_source(user.tenant_id, job_id)
     if source is None:
@@ -322,6 +356,13 @@ def list_vendor_tags(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    if not user.is_verified:
+        return {
+            "tags": [],
+            "untagged": [],
+            "masked": True,
+            "message": "Verify your email to manage vendor classifications.",
+        }
     tags = _load_vendor_tags_for_tenant(user.tenant_id)
     tag_list = [
         {"vendor": vendor, "classification": classification}
@@ -351,6 +392,8 @@ def upsert_vendor_tag(
     payload: VendorTagPayload,
     user: User = Depends(get_current_user),
 ):
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="verification_required")
     vendor = payload.vendor.strip().upper()
     classification = payload.classification.upper()
     if classification not in {"NEEDS", "WANTS"}:
@@ -366,6 +409,8 @@ def delete_vendor_tag(
     vendor: str,
     user: User = Depends(get_current_user),
 ):
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="verification_required")
     target = vendor.strip().upper()
     tags = _load_vendor_tags_for_tenant(user.tenant_id)
     if target not in tags:

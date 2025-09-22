@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, Boolean
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -24,6 +24,9 @@ class User(Base):
     salt = Column(String, nullable=False)
     api_token = Column(String, unique=True, nullable=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    is_verified = Column(Boolean, nullable=False, default=False)
+    verification_code = Column(String, nullable=True)
+    verified_at = Column(DateTime, nullable=True)
 
     tenant = relationship("Tenant", backref="users")
 

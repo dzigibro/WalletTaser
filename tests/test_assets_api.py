@@ -12,8 +12,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from wallettaser.api import app
+from wallettaser.auth import issue_token
 from wallettaser.database import SessionLocal
-from wallettaser.models import Job, Tenant
+from wallettaser.models import Job, Tenant, User
 from wallettaser.pipeline import DATA_ROOT_ENV, process_statement
 
 
@@ -75,7 +76,7 @@ def test_assets_listing_and_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     finally:
         session.close()
 
-    token_resp = client.post("/auth/token", json={"username": "demo", "password": "demo"})
+    token_resp = client.post("/auth/token", json={"email": "demo@example.com", "password": "demo"})
     assert token_resp.status_code == 200
     token = token_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -166,7 +167,7 @@ def test_reanalyze_triggers_celery(
     finally:
         session.close()
 
-    token_resp = client.post("/auth/token", json={"username": "demo", "password": "demo"})
+    token_resp = client.post("/auth/token", json={"email": "demo@example.com", "password": "demo"})
     assert token_resp.status_code == 200
     token = token_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -202,3 +203,61 @@ def test_reanalyze_triggers_celery(
     assert not Path(result["report_directory"]).exists()
     assert not Path(result["archive_path"]).exists()
     assert stored_path.exists()
+
+
+def test_summary_masked_for_unverified(
+    tmp_path: Path,
+    sample_statement: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    data_root = tmp_path / "data"
+    monkeypatch.setenv(DATA_ROOT_ENV, str(data_root))
+
+    email = f"masked_{uuid.uuid4().hex[:6]}@example.com"
+    register_resp = client.post(
+        "/auth/register",
+        json={"email": email, "password": "MaskedPass1!"},
+    )
+    assert register_resp.status_code == 201
+
+    session = SessionLocal()
+    try:
+        user = session.query(User).filter(User.username == email).first()
+        assert user is not None
+        token = issue_token(session, user)
+        tenant_id = user.tenant_id
+    finally:
+        session.close()
+
+    job_id = uuid.uuid4().hex
+    result = process_statement(
+        tenant_id=tenant_id,
+        job_id=job_id,
+        statement_path=sample_statement,
+        fx_rate=119.0,
+    )
+
+    session = SessionLocal()
+    try:
+        job = session.query(Job).filter_by(id=job_id).first()
+        assert job is not None
+        job.status = "completed"
+        job.result_path = result["archive_path"]
+        job.report_directory = result["report_directory"]
+        job.summary = json.dumps(asdict(result["summary"]))
+        session.add(job)
+        session.commit()
+    finally:
+        session.close()
+
+    headers = {"Authorization": f"Bearer {token}"}
+    summary_resp = client.get(f"/statements/{job_id}/summary", headers=headers)
+    assert summary_resp.status_code == 200
+    summary_payload = summary_resp.json()
+    assert summary_payload["summary"]["masked"] is True
+
+    assets_resp = client.get(f"/statements/{job_id}/assets", headers=headers)
+    assert assets_resp.status_code == 200
+    assets_payload = assets_resp.json()
+    assert assets_payload.get("masked") is True

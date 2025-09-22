@@ -4,6 +4,8 @@
 - Tags NEEDS vs WANTS using vendor memory (`vendor_tags.csv`)
 - Regex-based vendor identification (LIDL, Car:Go, TIDAL, Binance, etc.)
 - Category classification: Income, Stocks, Savings, ATM, Spending
+- Email-based sign-up with verification gating (unverified users see masked
+  summaries—perfect for demo bait)
 - Auto-generates:
   - Totals by category
   - Top vendor spending
@@ -61,13 +63,14 @@ without the worker.
 
 ### 3. Authenticate
 
-Create a tenant with `POST /auth/register` or use the bundled demo tenant
-(`demo` / `demo`) to obtain a bearer token:
+Create an account with `POST /auth/register`, verify the emailed code via
+`POST /auth/verify`, or use the bundled demo tenant (`demo` / `demo`) to obtain
+a bearer token:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/auth/token \
   -H 'Content-Type: application/json' \
-  -d '{"username": "demo", "password": "demo"}'
+  -d '{"email": "demo@example.com", "password": "demo"}'
 ```
 
 ### 4. Upload statements
@@ -119,7 +122,13 @@ isolated to their tenant: uploads, tags, and reports are stored in
 - `DELETE /vendors/{vendor}`
   - Removes a saved classification to reset future prompts.
 - `POST /auth/register`
-  - Body: `{ "username": "alice", "password": "Secret123!", "tenant_name": "Household" }` to create a new tenant + user in one step. Returns a bearer token for immediate use.
+  - Body: `{ "email": "alice@example.com", "password": "Secret123!" }` to
+    create an account. A verification code is generated and must be confirmed
+    before reports and assets unlock.
+- `POST /auth/verify`
+  - Body: `{ "email": "alice@example.com", "code": "123456" }` to exchange a
+    verification code for a bearer token. Until verified, summaries and assets
+    stay masked.
 
 ### 🖼️ Web Dashboard
 

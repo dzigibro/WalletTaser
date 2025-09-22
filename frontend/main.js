@@ -19,10 +19,15 @@ const elements = {
   registerUsername: document.querySelector("#register-username"),
   registerPassword: document.querySelector("#register-password"),
   registerConfirm: document.querySelector("#register-confirm"),
-  registerTenant: document.querySelector("#register-tenant"),
   registerStatus: document.querySelector("#register-status"),
   switchToRegister: document.querySelector("#switch-to-register"),
   switchToLogin: document.querySelector("#switch-to-login"),
+  verifyForm: document.querySelector("#verify-form"),
+  verifyEmail: document.querySelector("#verify-email"),
+  verifyCode: document.querySelector("#verify-code"),
+  verifyStatus: document.querySelector("#verify-status"),
+  verifyToLogin: document.querySelector("#verify-to-login"),
+  devCodeHint: document.querySelector("#dev-code-hint"),
   appPanel: document.querySelector("#app-panel"),
   tenantLabel: document.querySelector("#tenant-label"),
   tokenPreview: document.querySelector("#token-preview"),
@@ -123,17 +128,40 @@ function toggleApp(active) {
   elements.appPanel.hidden = !active;
 }
 
-function toggleAuthMode(mode = "login") {
+function toggleAuthMode(mode = "login", { email = "", codeHint = "" } = {}) {
   const showLogin = mode === "login";
+  const showRegister = mode === "register";
+  const showVerify = mode === "verify";
   if (elements.loginForm) {
     elements.loginForm.hidden = !showLogin;
   }
   if (elements.registerForm) {
-    elements.registerForm.hidden = showLogin;
+    elements.registerForm.hidden = !showRegister;
+  }
+  if (elements.verifyForm) {
+    elements.verifyForm.hidden = !showVerify;
   }
   setStatus(elements.authStatus, "");
   if (elements.registerStatus) {
     setStatus(elements.registerStatus, "");
+  }
+  if (elements.verifyStatus) {
+    setStatus(elements.verifyStatus, "");
+  }
+  if (showVerify && elements.verifyEmail) {
+    elements.verifyEmail.value = email;
+  }
+  if (showVerify && elements.verifyCode) {
+    elements.verifyCode.value = "";
+  }
+  if (elements.devCodeHint) {
+    if (showVerify && codeHint) {
+      elements.devCodeHint.hidden = false;
+      elements.devCodeHint.textContent = `Dev code: ${codeHint}`;
+    } else {
+      elements.devCodeHint.hidden = true;
+      elements.devCodeHint.textContent = "";
+    }
   }
 }
 
@@ -155,10 +183,10 @@ function ensureLoggedIn() {
 
 async function login(event) {
   event.preventDefault();
-  const username = elements.username.value.trim();
+  const email = elements.username.value.trim();
   const password = elements.password.value;
 
-  if (!username || !password) {
+  if (!email || !password) {
     setStatus(elements.authStatus, "Fill in all fields", { error: true });
     return;
   }
@@ -173,11 +201,16 @@ async function login(event) {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ email, password }),
     });
 
     if (!response.ok) {
       const reason = await response.json().catch(() => ({}));
+      if (response.status === 403 && reason.detail === "verification_required") {
+        toggleAuthMode("verify", { email });
+        setStatus(elements.authStatus, "Verify your email to continue", { error: true });
+        return;
+      }
       throw new Error(reason.detail || response.statusText);
     }
 
@@ -185,9 +218,12 @@ async function login(event) {
     token = payload.access_token;
     setStatus(elements.authStatus, "Authenticated");
     elements.tokenPreview.textContent = summarizeToken(token);
-    elements.tenantLabel.textContent = `User: ${username}`;
+    elements.tenantLabel.textContent = `User: ${email}`;
     toggleApp(true);
-    saveConfig({ username, token });
+    saveConfig({ email, token });
+    if (elements.verifyEmail) {
+      elements.verifyEmail.value = email;
+    }
     elements.password.value = "";
     await refreshJobList();
   } catch (error) {
@@ -195,7 +231,7 @@ async function login(event) {
     setStatus(elements.authStatus, error.message || "Failed to sign in", { error: true });
     token = null;
     toggleApp(false);
-    saveConfig({ username });
+    saveConfig({ email });
   } finally {
     submitButton.disabled = false;
   }
@@ -203,12 +239,11 @@ async function login(event) {
 
 async function registerAccount(event) {
   event.preventDefault();
-  const username = elements.registerUsername.value.trim();
+  const email = elements.registerUsername.value.trim();
   const password = elements.registerPassword.value;
   const confirm = elements.registerConfirm.value;
-  const tenant = elements.registerTenant.value.trim();
 
-  if (!username || !password || !confirm) {
+  if (!email || !password || !confirm) {
     setStatus(elements.registerStatus, "Fill in all fields", { error: true });
     return;
   }
@@ -224,7 +259,54 @@ async function registerAccount(event) {
     const response = await fetch(`${API_BASE_URL}/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, tenant_name: tenant || undefined }),
+      body: JSON.stringify({ email, password }),
+    });
+
+    if (!response.ok) {
+      const reason = await response.json().catch(() => ({}));
+      throw new Error(reason.detail || response.statusText);
+    }
+
+    const payload = await response.json();
+    setStatus(elements.registerStatus, "Account created. Verify your email to continue.");
+    elements.username.value = email;
+    elements.registerPassword.value = "";
+    elements.registerConfirm.value = "";
+    if (elements.verifyCode) {
+      elements.verifyCode.value = "";
+    }
+    if (elements.verifyEmail) {
+      elements.verifyEmail.value = payload.email || email;
+    }
+    toggleApp(false);
+    toggleAuthMode("verify", { email: payload.email || email, codeHint: payload.verification_hint });
+    saveConfig({ email });
+  } catch (error) {
+    console.error(error);
+    setStatus(elements.registerStatus, error.message || "Failed to register", { error: true });
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function verifyAccount(event) {
+  event.preventDefault();
+  const email = elements.verifyEmail.value.trim();
+  const code = elements.verifyCode.value.trim();
+
+  if (!email || !code) {
+    setStatus(elements.verifyStatus, "Provide email and code", { error: true });
+    return;
+  }
+  const button = elements.verifyForm.querySelector("button[type='submit']");
+  button.disabled = true;
+  setStatus(elements.verifyStatus, "Verifying…");
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, code }),
     });
 
     if (!response.ok) {
@@ -234,19 +316,16 @@ async function registerAccount(event) {
 
     const payload = await response.json();
     token = payload.access_token;
-    setStatus(elements.registerStatus, "Account created. Welcome!");
-    elements.username.value = username;
-    toggleApp(true);
     elements.tokenPreview.textContent = summarizeToken(token);
-    elements.tenantLabel.textContent = `User: ${username}`;
-    saveConfig({ username, token });
-    elements.registerPassword.value = "";
-    elements.registerConfirm.value = "";
-    elements.password.value = "";
+    elements.tenantLabel.textContent = `User: ${email}`;
+    setStatus(elements.verifyStatus, "Email verified. Welcome!");
+    toggleApp(true);
+    saveConfig({ email, token });
+    elements.username.value = email;
     await refreshJobList();
   } catch (error) {
     console.error(error);
-    setStatus(elements.registerStatus, error.message || "Failed to register", { error: true });
+    setStatus(elements.verifyStatus, error.message || "Failed to verify", { error: true });
     token = null;
     toggleApp(false);
   } finally {
@@ -269,7 +348,15 @@ function logout() {
   if (elements.reanalyzeJob) {
     elements.reanalyzeJob.disabled = true;
   }
-  saveConfig({ username: elements.username.value.trim() });
+  elements.password.value = "";
+  if (elements.verifyCode) {
+    elements.verifyCode.value = "";
+  }
+  const email = elements.username.value.trim();
+  if (elements.verifyEmail) {
+    elements.verifyEmail.value = email;
+  }
+  saveConfig(email ? { email } : {});
 }
 
 function renderJobs(jobs) {
@@ -341,10 +428,31 @@ async function loadSummary(jobId) {
     const response = await authFetch(`/statements/${jobId}/summary`);
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
+      if (response.status === 403 && detail.detail === "verification_required") {
+        setStatus(elements.jobsStatus, "Verify your email to download reports", { error: true });
+        return;
+      }
       throw new Error(detail.detail || response.statusText);
     }
     const payload = await response.json();
     const summary = payload.summary;
+    if (summary?.masked) {
+      renderMaskedSummary(summary);
+      setStatus(
+        elements.summaryStatus,
+        summary.message || "Verify your email to unlock full insights",
+        { error: true },
+      );
+      currentJobId = jobId;
+      setStatus(elements.assetsStatus, summary.message || "Verify to access receipts", { error: true });
+      if (elements.deleteJob) {
+        elements.deleteJob.disabled = true;
+      }
+      if (elements.reanalyzeJob) {
+        elements.reanalyzeJob.disabled = true;
+      }
+      return;
+    }
     renderSummary(summary);
     setStatus(elements.summaryStatus, "Summary loaded.");
     currentJobId = jobId;
@@ -409,6 +517,20 @@ function computeSavingsRate(summary) {
   const spend = computeMonthlySpend(summary);
   if (spend <= 0) return 1;
   return computeMonthlySavings(summary) / spend;
+}
+
+function renderMaskedSummary(summary) {
+  const card = document.createElement("section");
+  card.className = "masked-summary";
+  const title = document.createElement("h4");
+  title.textContent = "Report locked";
+  const message = document.createElement("p");
+  message.textContent = summary?.message || "Verify your email to unlock full analytics.";
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "We already processed your statement—complete verification to reveal charts and details.";
+  card.append(title, message, hint);
+  elements.summaryContent.appendChild(card);
 }
 
 function computeSavingsPercentile(rate) {
@@ -812,6 +934,11 @@ async function loadAssets(jobId) {
       throw new Error(detail.detail || response.statusText);
     }
     const payload = await response.json();
+    if (payload.masked) {
+      elements.assetsGrid.replaceChildren();
+      setStatus(elements.assetsStatus, payload.message || "Verify your email to access receipts", { error: true });
+      return;
+    }
     const assets = payload.assets || [];
     await renderAssets(jobId, assets);
   } catch (error) {
@@ -913,6 +1040,10 @@ async function renderAssets(jobId, assets) {
 async function refreshVendorCoach(jobId, summary) {
   const card = document.querySelector("#tag-coach");
   if (!card) return;
+  if (summary?.masked) {
+    card.innerHTML = "<p class=\"status\">Verify your email to unlock vendor coaching.</p>";
+    return;
+  }
   const statusLine = card.querySelector(".tag-status");
   if (statusLine) {
     statusLine.classList.remove("error");
@@ -1289,6 +1420,9 @@ function openLightbox({ title, url, text }) {
   elements.lightbox.classList.add("visible");
   document.body.style.overflow = "hidden";
   document.addEventListener("keydown", onLightboxKeydown);
+  if (url) {
+    window.open(url, "_blank", "noopener");
+  }
 }
 
 function closeLightbox(immediate = false) {
@@ -1323,6 +1457,9 @@ async function fetchAssetBlob(jobId, assetName) {
   const response = await authFetch(`/statements/${jobId}/asset?name=${encodeURIComponent(assetName)}`);
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
+    if (response.status === 403 && detail.detail === "verification_required") {
+      throw new Error("Verify your email to view assets");
+    }
     throw new Error(detail.detail || response.statusText);
   }
   return response.blob();
@@ -1335,6 +1472,9 @@ async function downloadAsset(jobId, assetName) {
     const response = await authFetch(`/statements/${jobId}/asset?name=${encodeURIComponent(assetName)}`);
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
+      if (response.status === 403 && detail.detail === "verification_required") {
+        throw new Error("Verify your email to download assets");
+      }
       throw new Error(detail.detail || response.statusText);
     }
     const blob = await response.blob();
@@ -1469,11 +1609,17 @@ async function deleteCurrentJob() {
 function restoreFromConfig() {
   const config = loadConfig();
   toggleAuthMode("login");
-  if (config.username) elements.username.value = config.username;
+  const savedEmail = config.email || config.username;
+  if (savedEmail) {
+    elements.username.value = savedEmail;
+    if (elements.verifyEmail) {
+      elements.verifyEmail.value = savedEmail;
+    }
+  }
   if (config.token) {
     token = config.token;
     elements.tokenPreview.textContent = summarizeToken(token);
-    elements.tenantLabel.textContent = `User: ${config.username || "tenant"}`;
+    elements.tenantLabel.textContent = `User: ${savedEmail || "account"}`;
     toggleApp(true);
     refreshJobList();
   }
@@ -1482,6 +1628,9 @@ function restoreFromConfig() {
 elements.loginForm.addEventListener("submit", login);
 if (elements.registerForm) {
   elements.registerForm.addEventListener("submit", registerAccount);
+}
+if (elements.verifyForm) {
+  elements.verifyForm.addEventListener("submit", verifyAccount);
 }
 elements.logout.addEventListener("click", logout);
 elements.uploadForm.addEventListener("submit", uploadStatement);
@@ -1497,6 +1646,9 @@ if (elements.switchToRegister) {
 }
 if (elements.switchToLogin) {
   elements.switchToLogin.addEventListener("click", () => toggleAuthMode("login"));
+}
+if (elements.verifyToLogin) {
+  elements.verifyToLogin.addEventListener("click", () => toggleAuthMode("login"));
 }
 if (elements.lightbox) {
   elements.lightbox.addEventListener("click", (event) => {

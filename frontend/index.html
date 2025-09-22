@@ -14,8 +14,8 @@
 
         <form id="login-form" class="stack" autocomplete="off">
           <label>
-            Username
-            <input type="text" id="username" placeholder="demo" required />
+            Email
+            <input type="email" id="username" placeholder="you@example.com" required />
           </label>
           <label>
             Password
@@ -31,8 +31,8 @@
 
         <form id="register-form" class="stack" autocomplete="off" hidden>
           <label>
-            Username
-            <input type="text" id="register-username" placeholder="you" required />
+            Email
+            <input type="email" id="register-username" placeholder="you@example.com" required />
           </label>
           <label>
             Password
@@ -42,16 +42,31 @@
             Confirm Password
             <input type="password" id="register-confirm" placeholder="repeat password" required />
           </label>
-          <label>
-            Workspace / Tenant (optional)
-            <input type="text" id="register-tenant" placeholder="My Household" />
-          </label>
           <button type="submit" class="primary">Create account</button>
           <p id="register-status" class="status"></p>
           <p class="auth-switch">
             Already have an account?
             <button type="button" id="switch-to-login" class="ghost">Sign in</button>
           </p>
+        </form>
+
+        <form id="verify-form" class="stack" autocomplete="off" hidden>
+          <p>We sent you a 6-digit verification code. Enter it below to unlock full reports.</p>
+          <label>
+            Email
+            <input type="email" id="verify-email" required />
+          </label>
+          <label>
+            Verification code
+            <input type="text" id="verify-code" placeholder="123456" required />
+          </label>
+          <button type="submit" class="primary">Verify account</button>
+          <p id="verify-status" class="status"></p>
+          <p class="auth-switch">
+            Already verified?
+            <button type="button" id="verify-to-login" class="ghost">Sign in</button>
+          </p>
+          <p id="dev-code-hint" class="status hint" hidden></p>
         </form>
       </section>
 

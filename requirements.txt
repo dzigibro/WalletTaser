@@ -10,3 +10,4 @@ celery
 redis
 pytest
 pdfplumber
+email-validator
