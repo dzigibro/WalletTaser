@@ -43,7 +43,7 @@ app.add_middleware(
 ensure_default_user()
 
 
-ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".csv"}
+ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".csv", ".pdf"}
 ALLOWED_ASSET_EXTENSIONS = {".png", ".csv", ".json"}
 _FILENAME_SANITIZER = re.compile(r"[^A-Za-z0-9._-]")
 

@@ -11,7 +11,7 @@ from .reporting import ReportSummary, generate_report
 
 DATA_ROOT_ENV = "WALLETTASER_DATA_ROOT"
 DEFAULT_DATA_ROOT = Path("data")
-STATEMENT_EXTENSIONS = {".xls", ".xlsx", ".csv"}
+STATEMENT_EXTENSIONS = {".xls", ".xlsx", ".csv", ".pdf"}
 
 
 class PipelineResult(TypedDict):

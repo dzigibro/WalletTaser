@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import secrets
 from hashlib import pbkdf2_hmac
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, constr
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_session, session_scope
@@ -19,6 +20,12 @@ auth_router = APIRouter(prefix="/auth", tags=["auth"])
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class RegistrationRequest(BaseModel):
+    username: constr(strip_whitespace=True, min_length=3, max_length=64)
+    password: constr(min_length=8, max_length=128)
+    tenant_name: constr(strip_whitespace=True, min_length=1, max_length=128) | None = None
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -86,5 +93,28 @@ class LoginRequest(BaseModel):
 @auth_router.post("/token", response_model=TokenResponse)
 def login(payload: LoginRequest, session: Session = Depends(get_session)) -> TokenResponse:
     user = authenticate(session, payload.username, payload.password)
+    token = issue_token(session, user)
+    return TokenResponse(access_token=token)
+
+
+@auth_router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+def register(payload: RegistrationRequest, session: Session = Depends(get_session)) -> TokenResponse:
+    username = payload.username.strip()
+    existing_user = session.query(User).filter(User.username == username).first()
+    if existing_user:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="username already registered")
+
+    desired_tenant = (payload.tenant_name or username).strip()
+    tenant_name = desired_tenant or f"tenant-{uuid.uuid4().hex[:8]}"
+
+    if session.query(Tenant).filter(Tenant.name == tenant_name).first():
+        tenant_name = f"{tenant_name}-{uuid.uuid4().hex[:6]}"
+
+    tenant = Tenant(name=tenant_name)
+    session.add(tenant)
+    session.commit()
+    session.refresh(tenant)
+
+    user = create_user(session, username, payload.password, tenant)
     token = issue_token(session, user)
     return TokenResponse(access_token=token)

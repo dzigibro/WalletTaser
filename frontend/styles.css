@@ -48,6 +48,20 @@ label {
   font-size: 0.9rem;
 }
 
+.auth-switch {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  font-size: 0.85rem;
+  color: rgba(148, 163, 184, 0.8);
+}
+
+.auth-switch button {
+  padding: 0.3rem 0.6rem;
+  min-width: auto;
+  font-size: 0.85rem;
+}
+
 input,
 button {
   font: inherit;

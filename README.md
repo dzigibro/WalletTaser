@@ -1,6 +1,6 @@
 ## 🔧 Features
 
-- Auto-detects export header rows from shitty Excel bank statements
+- Auto-detects export header rows from shitty Excel/PDF/CSV bank statements
 - Tags NEEDS vs WANTS using vendor memory (`vendor_tags.csv`)
 - Regex-based vendor identification (LIDL, Car:Go, TIDAL, Binance, etc.)
 - Category classification: Income, Stocks, Savings, ATM, Spending
@@ -61,7 +61,8 @@ without the worker.
 
 ### 3. Authenticate
 
-Use the bundled demo tenant (`demo` / `demo`) to obtain a bearer token:
+Create a tenant with `POST /auth/register` or use the bundled demo tenant
+(`demo` / `demo`) to obtain a bearer token:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/auth/token \
@@ -117,6 +118,8 @@ isolated to their tenant: uploads, tags, and reports are stored in
   - Body: `{ "vendor": "LIDL", "classification": "NEEDS" }` to remember a choice.
 - `DELETE /vendors/{vendor}`
   - Removes a saved classification to reset future prompts.
+- `POST /auth/register`
+  - Body: `{ "username": "alice", "password": "Secret123!", "tenant_name": "Household" }` to create a new tenant + user in one step. Returns a bearer token for immediate use.
 
 ### 🖼️ Web Dashboard
 

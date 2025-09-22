@@ -9,3 +9,4 @@ sqlalchemy
 celery
 redis
 pytest
+pdfplumber

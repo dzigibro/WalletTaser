@@ -17,9 +17,15 @@ from __future__ import annotations
 import argparse, csv, glob, logging, os, re, sqlite3, sys, textwrap
 from datetime import datetime, timedelta
 from itertools import cycle
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+
+try:
+    import pdfplumber
+except ImportError:  # pragma: no cover - optional dependency during tests
+    pdfplumber = None
 
 TAG_FILE = 'vendor_tags.csv'           # persistent NEEDS/WANTS map
 DEF_FX   = 117.0                       # default RSD → EUR
@@ -80,12 +86,70 @@ def _adv_cat(r:pd.Series)->str:
     return _base_cat(r)
 
 # ─── load & clean ───
+def _read_pdf_statement(path: str) -> pd.DataFrame:
+    if pdfplumber is None:
+        raise RuntimeError('pdfplumber is required to parse PDF statements')
+    rows: list[list[str]] = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables() or []
+            for table in tables:
+                for row in table:
+                    if not row:
+                        continue
+                    cleaned = [ (cell or '').strip() for cell in row ]
+                    if any(cleaned):
+                        rows.append(cleaned)
+    if not rows:
+        raise ValueError('No tabular data detected in PDF statement')
+    frame = pd.DataFrame(rows, dtype=str)
+    frame = frame.dropna(axis=1, how='all')
+    frame = frame.replace({'': pd.NA}).dropna(how='all')
+    return frame.reset_index(drop=True)
+
+
+def _read_statement_as_dataframe(path: str) -> pd.DataFrame:
+    suffix = Path(path).suffix.lower()
+    if suffix == '.csv':
+        return pd.read_csv(path, header=None, dtype=str)
+    if suffix == '.pdf':
+        return _read_pdf_statement(path)
+    return pd.read_excel(path, header=None, dtype=str)
+
+
+def _load_headered_dataframe(path: str, header_row: int) -> pd.DataFrame:
+    suffix = Path(path).suffix.lower()
+    if suffix == '.csv':
+        return pd.read_csv(path, header=header_row, dtype=str)
+    if suffix == '.pdf':
+        raw = _read_pdf_statement(path).copy()
+        raw.columns = range(raw.shape[1])
+        header = [str(val or '').strip() for val in raw.iloc[header_row].tolist()]
+        header = [h if h else f'col_{idx}' for idx, h in enumerate(header)]
+        seen: dict[str, int] = {}
+        unique_header: list[str] = []
+        for name in header:
+            count = seen.get(name, 0)
+            if count:
+                unique_header.append(f"{name}_{count}")
+            else:
+                unique_header.append(name)
+            seen[name] = count + 1
+        data = raw.iloc[header_row + 1 :].reset_index(drop=True)
+        data.columns = unique_header
+        return data.astype(str)
+    return pd.read_excel(path, header=header_row, dtype=str)
+
+
 def load_clean(path:str)->pd.DataFrame:
-    raw=pd.read_excel(path,header=None,dtype=str)
-    hdr=next(i for i in range(30) if sum(
-        any(k in str(c).lower() for k in ('datum','tip','opis','iznos'))
-        for c in raw.iloc[i])>=3)
-    df=pd.read_excel(path,header=hdr,dtype=str)
+    raw=_read_statement_as_dataframe(path)
+    try:
+        hdr=next(i for i in range(min(30, len(raw))) if sum(
+            any(k in str(c).lower() for k in ('datum','tip','opis','iznos'))
+            for c in raw.iloc[i])>=3)
+    except StopIteration as exc:
+        raise ValueError('Unable to locate header row in statement') from exc
+    df=_load_headered_dataframe(path, hdr)
     ren={}
     for c in df.columns:
         l=str(c).lower()

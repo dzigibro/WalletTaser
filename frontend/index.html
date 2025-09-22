@@ -12,7 +12,7 @@
         <h1>WalletTaser</h1>
         <p class="subtitle">Upload statements, monitor jobs, and review summaries.</p>
 
-        <form id="settings-form" class="stack" autocomplete="off">
+        <form id="login-form" class="stack" autocomplete="off">
           <label>
             Username
             <input type="text" id="username" placeholder="demo" required />
@@ -23,6 +23,35 @@
           </label>
           <button type="submit" class="primary">Sign in</button>
           <p id="auth-status" class="status"></p>
+          <p class="auth-switch">
+            No account?
+            <button type="button" id="switch-to-register" class="ghost">Sign up</button>
+          </p>
+        </form>
+
+        <form id="register-form" class="stack" autocomplete="off" hidden>
+          <label>
+            Username
+            <input type="text" id="register-username" placeholder="you" required />
+          </label>
+          <label>
+            Password
+            <input type="password" id="register-password" placeholder="8+ characters" required />
+          </label>
+          <label>
+            Confirm Password
+            <input type="password" id="register-confirm" placeholder="repeat password" required />
+          </label>
+          <label>
+            Workspace / Tenant (optional)
+            <input type="text" id="register-tenant" placeholder="My Household" />
+          </label>
+          <button type="submit" class="primary">Create account</button>
+          <p id="register-status" class="status"></p>
+          <p class="auth-switch">
+            Already have an account?
+            <button type="button" id="switch-to-login" class="ghost">Sign in</button>
+          </p>
         </form>
       </section>
 
@@ -38,7 +67,7 @@
         <section class="card">
           <h3>Upload Statement</h3>
           <form id="upload-form" class="inline-form">
-            <input type="file" id="statement-file" accept=".xlsx,.xls,.csv" required />
+            <input type="file" id="statement-file" accept=".xlsx,.xls,.csv,.pdf" required />
             <input type="number" step="0.01" id="fx-rate" placeholder="FX override" />
             <button type="submit" class="primary">Upload</button>
           </form>

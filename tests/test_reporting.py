@@ -27,6 +27,16 @@ def _create_sample_statement(path: Path) -> None:
     frame.to_excel(path, index=False)
 
 
+def _mock_pdf_table() -> pd.DataFrame:
+    rows = [
+        ["Datum", "Tip", "Opis", "Iznos"],
+        ["01.01.2023", "Uplata", "Zarada plata", "50000"],
+        ["03.01.2023", "Card", "Lidl grocery", "-8000"],
+        ["05.01.2023", "Card", "Car Go ride", "-2000"],
+    ]
+    return pd.DataFrame(rows)
+
+
 @pytest.fixture(scope="module")
 def sample_statement(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Return the path to a reusable sample statement."""
@@ -92,6 +102,21 @@ def test_generate_report_summary(tmp_path: Path, sample_statement: Path) -> None
     assert payload["net_flow"] == summary.net_flow
     assert payload["total_spend"] == summary.total_spend
     assert payload["untagged_vendors"] == summary.untagged_vendors
+
+
+def test_load_clean_handles_pdf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from finance import load_clean
+
+    pdf_path = tmp_path / "statement.pdf"
+    pdf_path.write_bytes(b"%PDF-test")
+
+    monkeypatch.setattr("finance._read_pdf_statement", lambda path: _mock_pdf_table())
+
+    df = load_clean(str(pdf_path))
+
+    assert not df.empty
+    assert set(df.columns) >= {"Datum", "Tip", "Opis", "Iznos"}
+    assert len(df) == 3
 
 
 def test_process_statement_creates_artifacts(

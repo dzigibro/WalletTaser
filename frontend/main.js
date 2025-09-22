@@ -14,7 +14,15 @@ const elements = {
   username: document.querySelector("#username"),
   password: document.querySelector("#password"),
   authStatus: document.querySelector("#auth-status"),
-  settingsForm: document.querySelector("#settings-form"),
+  loginForm: document.querySelector("#login-form"),
+  registerForm: document.querySelector("#register-form"),
+  registerUsername: document.querySelector("#register-username"),
+  registerPassword: document.querySelector("#register-password"),
+  registerConfirm: document.querySelector("#register-confirm"),
+  registerTenant: document.querySelector("#register-tenant"),
+  registerStatus: document.querySelector("#register-status"),
+  switchToRegister: document.querySelector("#switch-to-register"),
+  switchToLogin: document.querySelector("#switch-to-login"),
   appPanel: document.querySelector("#app-panel"),
   tenantLabel: document.querySelector("#tenant-label"),
   tokenPreview: document.querySelector("#token-preview"),
@@ -115,6 +123,20 @@ function toggleApp(active) {
   elements.appPanel.hidden = !active;
 }
 
+function toggleAuthMode(mode = "login") {
+  const showLogin = mode === "login";
+  if (elements.loginForm) {
+    elements.loginForm.hidden = !showLogin;
+  }
+  if (elements.registerForm) {
+    elements.registerForm.hidden = showLogin;
+  }
+  setStatus(elements.authStatus, "");
+  if (elements.registerStatus) {
+    setStatus(elements.registerStatus, "");
+  }
+}
+
 function summarizeToken(tokenValue) {
   if (!tokenValue) return "";
   return `${tokenValue.slice(0, 6)}…${tokenValue.slice(-4)}`;
@@ -141,7 +163,7 @@ async function login(event) {
     return;
   }
 
-  const submitButton = elements.settingsForm.querySelector("button[type='submit']");
+  const submitButton = elements.loginForm.querySelector("button[type='submit']");
   submitButton.disabled = true;
   setStatus(elements.authStatus, "Signing in…");
 
@@ -179,9 +201,63 @@ async function login(event) {
   }
 }
 
+async function registerAccount(event) {
+  event.preventDefault();
+  const username = elements.registerUsername.value.trim();
+  const password = elements.registerPassword.value;
+  const confirm = elements.registerConfirm.value;
+  const tenant = elements.registerTenant.value.trim();
+
+  if (!username || !password || !confirm) {
+    setStatus(elements.registerStatus, "Fill in all fields", { error: true });
+    return;
+  }
+  if (password !== confirm) {
+    setStatus(elements.registerStatus, "Passwords do not match", { error: true });
+    return;
+  }
+  const button = elements.registerForm.querySelector("button[type='submit']");
+  button.disabled = true;
+  setStatus(elements.registerStatus, "Creating account…");
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, tenant_name: tenant || undefined }),
+    });
+
+    if (!response.ok) {
+      const reason = await response.json().catch(() => ({}));
+      throw new Error(reason.detail || response.statusText);
+    }
+
+    const payload = await response.json();
+    token = payload.access_token;
+    setStatus(elements.registerStatus, "Account created. Welcome!");
+    elements.username.value = username;
+    toggleApp(true);
+    elements.tokenPreview.textContent = summarizeToken(token);
+    elements.tenantLabel.textContent = `User: ${username}`;
+    saveConfig({ username, token });
+    elements.registerPassword.value = "";
+    elements.registerConfirm.value = "";
+    elements.password.value = "";
+    await refreshJobList();
+  } catch (error) {
+    console.error(error);
+    setStatus(elements.registerStatus, error.message || "Failed to register", { error: true });
+    token = null;
+    toggleApp(false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function logout() {
   token = null;
   toggleApp(false);
+  toggleAuthMode("login");
   setStatus(elements.authStatus, "Signed out");
   elements.tokenPreview.textContent = "";
   elements.summaryCard.hidden = true;
@@ -1392,6 +1468,7 @@ async function deleteCurrentJob() {
 
 function restoreFromConfig() {
   const config = loadConfig();
+  toggleAuthMode("login");
   if (config.username) elements.username.value = config.username;
   if (config.token) {
     token = config.token;
@@ -1402,7 +1479,10 @@ function restoreFromConfig() {
   }
 }
 
-elements.settingsForm.addEventListener("submit", login);
+elements.loginForm.addEventListener("submit", login);
+if (elements.registerForm) {
+  elements.registerForm.addEventListener("submit", registerAccount);
+}
 elements.logout.addEventListener("click", logout);
 elements.uploadForm.addEventListener("submit", uploadStatement);
 elements.refreshJobs.addEventListener("click", refreshJobList);
@@ -1411,6 +1491,12 @@ if (elements.deleteJob) {
 }
 if (elements.reanalyzeJob) {
   elements.reanalyzeJob.addEventListener("click", reanalyzeCurrentJob);
+}
+if (elements.switchToRegister) {
+  elements.switchToRegister.addEventListener("click", () => toggleAuthMode("register"));
+}
+if (elements.switchToLogin) {
+  elements.switchToLogin.addEventListener("click", () => toggleAuthMode("login"));
 }
 if (elements.lightbox) {
   elements.lightbox.addEventListener("click", (event) => {
