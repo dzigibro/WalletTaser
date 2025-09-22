@@ -5,12 +5,13 @@ import csv
 import os
 import zipfile
 from pathlib import Path
-from typing import Dict, TypedDict
+from typing import Dict, Optional, TypedDict
 
 from .reporting import ReportSummary, generate_report
 
 DATA_ROOT_ENV = "WALLETTASER_DATA_ROOT"
 DEFAULT_DATA_ROOT = Path("data")
+STATEMENT_EXTENSIONS = {".xls", ".xlsx", ".csv"}
 
 
 class PipelineResult(TypedDict):
@@ -66,6 +67,17 @@ def write_vendor_tags(path: Path, tags: Dict[str, str]) -> None:
                     "CLASS": (classification or "").strip().upper(),
                 }
             )
+
+
+def locate_statement_source(tenant_id: int | str, job_id: str) -> Optional[Path]:
+    """Return the uploaded statement path for ``job_id`` if it exists."""
+    uploads_dir = tenant_root(tenant_id) / "uploads" / job_id
+    if not uploads_dir.exists():
+        return None
+    for candidate in sorted(uploads_dir.iterdir()):
+        if candidate.is_file() and candidate.suffix.lower() in STATEMENT_EXTENSIONS:
+            return candidate
+    return None
 
 
 def process_statement(

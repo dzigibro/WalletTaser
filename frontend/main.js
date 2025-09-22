@@ -33,6 +33,7 @@ const elements = {
   assetsStatus: document.querySelector("#assets-status"),
   assetsGrid: document.querySelector("#assets-grid"),
   deleteJob: document.querySelector("#delete-job"),
+  reanalyzeJob: document.querySelector("#reanalyze-job"),
   lightbox: document.querySelector("#lightbox"),
   lightboxImage: document.querySelector("#lightbox-image"),
   lightboxText: document.querySelector("#lightbox-text"),
@@ -54,6 +55,9 @@ const dismissedVendors = new Set();
 
 if (elements.deleteJob) {
   elements.deleteJob.disabled = true;
+}
+if (elements.reanalyzeJob) {
+  elements.reanalyzeJob.disabled = true;
 }
 
 function loadConfig() {
@@ -89,6 +93,8 @@ function clearAssetPreviews() {
   }
   closeLightbox(true);
 }
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function formatBytes(size) {
   if (!Number.isFinite(size) || size <= 0) {
@@ -184,6 +190,9 @@ function logout() {
   setStatus(elements.assetsStatus, "");
   currentJobId = null;
   dismissedVendors.clear();
+  if (elements.reanalyzeJob) {
+    elements.reanalyzeJob.disabled = true;
+  }
   saveConfig({ username: elements.username.value.trim() });
 }
 
@@ -248,6 +257,9 @@ async function loadSummary(jobId) {
   elements.summaryJob.textContent = jobId;
   setStatus(elements.summaryStatus, "Loading summary…");
   elements.summaryContent.replaceChildren();
+  if (elements.reanalyzeJob) {
+    elements.reanalyzeJob.disabled = true;
+  }
 
   try {
     const response = await authFetch(`/statements/${jobId}/summary`);
@@ -263,6 +275,9 @@ async function loadSummary(jobId) {
     if (elements.deleteJob) {
       elements.deleteJob.disabled = false;
     }
+    if (elements.reanalyzeJob) {
+      elements.reanalyzeJob.disabled = false;
+    }
     setStatus(elements.assetsStatus, "Loading receipts…");
     await loadAssets(jobId);
     await refreshVendorCoach(jobId, summary);
@@ -274,6 +289,9 @@ async function loadSummary(jobId) {
     currentJobId = null;
     if (elements.deleteJob) {
       elements.deleteJob.disabled = true;
+    }
+    if (elements.reanalyzeJob) {
+      elements.reanalyzeJob.disabled = true;
     }
   }
 }
@@ -1114,8 +1132,10 @@ async function ensureAssetText(jobId, assetName) {
 
 async function openImagePreview(jobId, assetName) {
   try {
+    setStatus(elements.summaryStatus, "Opening preview…");
     const url = await ensureAssetUrl(jobId, assetName);
     openLightbox({ title: assetName, url });
+    setStatus(elements.summaryStatus, "Preview ready.");
   } catch (error) {
     console.error(error);
     setStatus(elements.summaryStatus, error.message || "Failed to open image", { error: true });
@@ -1124,8 +1144,10 @@ async function openImagePreview(jobId, assetName) {
 
 async function openTextPreview(jobId, assetName) {
   try {
+    setStatus(elements.summaryStatus, "Opening preview…");
     const entry = await ensureAssetText(jobId, assetName);
     openLightbox({ title: assetName, text: entry.text });
+    setStatus(elements.summaryStatus, "Preview ready.");
   } catch (error) {
     console.error(error);
     setStatus(elements.summaryStatus, error.message || "Failed to open preview", { error: true });
@@ -1140,7 +1162,16 @@ const onLightboxKeydown = (event) => {
 };
 
 function openLightbox({ title, url, text }) {
-  if (!elements.lightbox) return;
+  if (!elements.lightbox) {
+    if (url) {
+      window.open(url, "_blank", "noopener");
+    } else if (text) {
+      const blobUrl = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      window.open(blobUrl, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+    }
+    return;
+  }
   if (elements.lightboxImage) {
     if (url) {
       elements.lightboxImage.hidden = false;
@@ -1231,6 +1262,76 @@ async function downloadAsset(jobId, assetName) {
   }
 }
 
+async function pollJobUntilComplete(jobId, { timeoutMs = 180000, intervalMs = 2000, onUpdate } = {}) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const response = await authFetch(`/statements/${jobId}`);
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || response.statusText);
+    }
+    const payload = await response.json();
+    if (typeof onUpdate === "function") {
+      await onUpdate(payload.status, payload);
+    }
+    if (payload.status === "completed") {
+      return payload;
+    }
+    if (payload.status === "failed") {
+      throw new Error(payload.error || "Re-analysis failed");
+    }
+    await delay(intervalMs);
+  }
+  throw new Error("Timed out while waiting for re-analysis");
+}
+
+async function reanalyzeCurrentJob() {
+  if (!ensureLoggedIn()) {
+    setStatus(elements.summaryStatus, "Sign in first", { error: true });
+    return;
+  }
+  if (!currentJobId) {
+    setStatus(elements.summaryStatus, "No report selected", { error: true });
+    return;
+  }
+
+  const jobId = currentJobId;
+  setStatus(elements.summaryStatus, "Re-analyzing report…");
+  setStatus(elements.assetsStatus, "Waiting for fresh assets…");
+  clearAssetPreviews();
+
+  if (elements.reanalyzeJob) elements.reanalyzeJob.disabled = true;
+  if (elements.deleteJob) elements.deleteJob.disabled = true;
+
+  try {
+    const response = await authFetch(`/statements/${jobId}/reanalyze`, { method: "POST" });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || response.statusText);
+    }
+
+    await pollJobUntilComplete(jobId, {
+      async onUpdate(status) {
+        const copy = { queued: "Queued for re-analysis…", processing: "Crunching numbers…" };
+        setStatus(elements.summaryStatus, copy[status] || `Status: ${status}`);
+        await refreshJobList();
+      },
+    });
+
+    setStatus(elements.summaryStatus, "Re-analysis complete. Refreshing summary…");
+    await loadSummary(jobId);
+  } catch (error) {
+    console.error(error);
+    setStatus(elements.summaryStatus, error.message || "Failed to re-analyze", { error: true });
+    setStatus(elements.assetsStatus, "");
+  } finally {
+    await refreshJobList();
+    const hasJob = Boolean(currentJobId);
+    if (elements.reanalyzeJob) elements.reanalyzeJob.disabled = !hasJob;
+    if (elements.deleteJob) elements.deleteJob.disabled = !hasJob;
+  }
+}
+
 async function deleteCurrentJob() {
   if (!ensureLoggedIn()) {
     setStatus(elements.summaryStatus, "Sign in first", { error: true });
@@ -1244,6 +1345,8 @@ async function deleteCurrentJob() {
   if (!confirmed) return;
 
   setStatus(elements.summaryStatus, "Deleting report…");
+  if (elements.deleteJob) elements.deleteJob.disabled = true;
+  if (elements.reanalyzeJob) elements.reanalyzeJob.disabled = true;
   try {
     const response = await authFetch(`/statements/${currentJobId}`, { method: "DELETE" });
     if (!response.ok) {
@@ -1260,10 +1363,15 @@ async function deleteCurrentJob() {
     if (elements.deleteJob) {
       elements.deleteJob.disabled = true;
     }
+    if (elements.reanalyzeJob) {
+      elements.reanalyzeJob.disabled = true;
+    }
     await refreshJobList();
   } catch (error) {
     console.error(error);
     setStatus(elements.summaryStatus, error.message || "Failed to delete report", { error: true });
+    if (elements.deleteJob) elements.deleteJob.disabled = false;
+    if (elements.reanalyzeJob) elements.reanalyzeJob.disabled = false;
   }
 }
 
@@ -1285,6 +1393,9 @@ elements.uploadForm.addEventListener("submit", uploadStatement);
 elements.refreshJobs.addEventListener("click", refreshJobList);
 if (elements.deleteJob) {
   elements.deleteJob.addEventListener("click", deleteCurrentJob);
+}
+if (elements.reanalyzeJob) {
+  elements.reanalyzeJob.addEventListener("click", reanalyzeCurrentJob);
 }
 if (elements.lightbox) {
   elements.lightbox.addEventListener("click", (event) => {

@@ -20,7 +20,13 @@ from pydantic import BaseModel, constr
 from .auth import auth_router, ensure_default_user, get_current_user
 from .database import Base, engine, get_session
 from .models import Job, User
-from .pipeline import get_data_root, load_vendor_tags, vendor_tags_path, write_vendor_tags
+from .pipeline import (
+    get_data_root,
+    load_vendor_tags,
+    locate_statement_source,
+    vendor_tags_path,
+    write_vendor_tags,
+)
 from .tasks import process_statement_task
 
 app = FastAPI(title="WalletTaser API")
@@ -279,6 +285,35 @@ def get_job_asset(
 
     media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
     return FileResponse(file_path, media_type=media_type, filename=file_path.name)
+
+
+@app.post("/statements/{job_id}/reanalyze", status_code=202)
+def reanalyze_statement(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    job = _get_owned_job(session, job_id, user.tenant_id)
+    source = locate_statement_source(user.tenant_id, job_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Original statement missing for re-analysis")
+
+    report_dir = Path(job.report_directory) if job.report_directory else None
+    archive_path = Path(job.result_path) if job.result_path else None
+    _safe_remove(path for path in (report_dir, archive_path))
+
+    job.status = "queued"
+    job.started_at = None
+    job.completed_at = None
+    job.error = None
+    session.commit()
+
+    process_statement_task.delay(job_id, user.tenant_id, str(source), job.fx_rate)
+
+    return {
+        "job_id": job_id,
+        "status": job.status,
+    }
 
 
 @app.get("/vendors")

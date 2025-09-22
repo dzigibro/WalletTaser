@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -121,3 +122,83 @@ def test_assets_listing_and_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert report_dir_path and not report_dir_path.exists()
     assert archive_path and not archive_path.exists()
     assert uploads_dir and not uploads_dir.exists()
+
+
+def test_reanalyze_triggers_celery(
+    tmp_path: Path,
+    sample_statement: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    data_root = tmp_path / "data"
+    monkeypatch.setenv(DATA_ROOT_ENV, str(data_root))
+
+    session = SessionLocal()
+    try:
+        tenant = session.query(Tenant).filter_by(name="default").first()
+        assert tenant is not None
+
+        job_id = uuid.uuid4().hex
+        result = process_statement(
+            tenant_id=tenant.id,
+            job_id=job_id,
+            statement_path=sample_statement,
+            fx_rate=118.0,
+        )
+
+        uploads_dir = data_root / str(tenant.id) / "uploads" / job_id
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        stored_path = uploads_dir / f"{job_id}{sample_statement.suffix}"
+        shutil.copy2(sample_statement, stored_path)
+
+        job = Job(
+            id=job_id,
+            tenant_id=tenant.id,
+            filename="statement.xlsx",
+            status="completed",
+            result_path=result["archive_path"],
+            report_directory=result["report_directory"],
+            fx_rate=118.0,
+            summary=json.dumps(asdict(result["summary"])),
+        )
+        session.add(job)
+        session.commit()
+    finally:
+        session.close()
+
+    token_resp = client.post("/auth/token", json={"username": "demo", "password": "demo"})
+    assert token_resp.status_code == 200
+    token = token_resp.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    captured: dict[str, tuple[str, int, str, float | None]] = {}
+
+    def fake_delay(job_id_arg: str, tenant_arg: int, statement_arg: str, fx_arg: float | None) -> None:
+        captured["call"] = (job_id_arg, tenant_arg, statement_arg, fx_arg)
+
+    monkeypatch.setattr("wallettaser.api.process_statement_task.delay", fake_delay)
+
+    reanalyze_resp = client.post(f"/statements/{job_id}/reanalyze", headers=headers)
+    assert reanalyze_resp.status_code == 202
+    payload = reanalyze_resp.json()
+    assert payload["status"] == "queued"
+
+    assert "call" in captured
+    args = captured["call"]
+    assert args[0] == job_id
+    assert args[1] == tenant.id
+    assert args[2] == str(stored_path)
+    assert args[3] == pytest.approx(118.0)
+
+    session = SessionLocal()
+    try:
+        refreshed = session.query(Job).filter_by(id=job_id).first()
+        assert refreshed is not None
+        assert refreshed.status == "queued"
+        assert refreshed.error is None
+    finally:
+        session.close()
+
+    assert not Path(result["report_directory"]).exists()
+    assert not Path(result["archive_path"]).exists()
+    assert stored_path.exists()
