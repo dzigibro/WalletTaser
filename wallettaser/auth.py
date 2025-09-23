@@ -69,19 +69,27 @@ def _ensure_user_schema() -> None:
 
 def ensure_default_user() -> None:
     _ensure_user_schema()
+    demo_email = "demo@example.com"
     with session_scope() as session:
         tenant = session.query(Tenant).filter_by(name="default").first()
         if tenant is None:
             tenant = Tenant(name="default")
             session.add(tenant)
             session.flush()
-        user = session.query(User).filter_by(username="demo").first()
+
+        user = (
+            session.query(User)
+            .filter(User.username.in_({"demo", demo_email}))
+            .first()
+        )
+
         if user is None:
-            user = create_user(session, "demo@example.com", "demo", tenant)
-        elif user.username == "demo":
-            user.username = "demo@example.com"
+            user = create_user(session, demo_email, "demo", tenant)
+        elif user.username != demo_email:
+            user.username = demo_email
             session.add(user)
             session.commit()
+
         if not user.is_verified:
             user.is_verified = True
             user.verification_code = None

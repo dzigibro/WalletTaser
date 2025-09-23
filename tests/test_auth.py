@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from wallettaser.api import app
+from wallettaser.auth import ensure_default_user
 from wallettaser.database import SessionLocal
 from wallettaser.models import Tenant, User
 
@@ -78,3 +79,19 @@ def test_register_rejects_duplicate_email(client: TestClient, monkeypatch: pytes
         json={"email": email, "password": "Different1!"},
     )
     assert duplicate.status_code == 409
+
+
+def test_ensure_default_user_idempotent() -> None:
+    ensure_default_user()
+    ensure_default_user()
+
+    session = SessionLocal()
+    try:
+        demo_email = "demo@example.com"
+        users = session.query(User).filter(User.username == demo_email).all()
+        assert len(users) == 1
+        legacy_users = session.query(User).filter(User.username == "demo").count()
+        assert legacy_users == 0
+        assert users[0].is_verified
+    finally:
+        session.close()
